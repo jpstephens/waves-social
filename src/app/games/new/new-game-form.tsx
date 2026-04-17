@@ -46,11 +46,14 @@ export function NewGameForm() {
         throw new Error(json.error ?? `Upload failed (${res.status})`);
       }
       if (json.warning) {
-        toast.warning(json.warning);
+        toast.warning(json.warning, {
+          description: json.error,
+          duration: 12000,
+        });
       } else {
         toast.success("Box score read — review the proposed posts");
       }
-      router.push(`/games/${json.gameId}`);
+      if (json.gameId) router.push(`/games/${json.gameId}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
     } finally {
