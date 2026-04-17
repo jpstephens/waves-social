@@ -6,11 +6,13 @@ export const dynamic = "force-dynamic";
 export default async function CalendarPage() {
   await requireCoach();
   return (
-    <AppShell>
+    <AppShell subtitle="Content Calendar">
       <div className="mx-auto max-w-3xl p-8">
-        <h1 className="text-2xl font-bold text-slate-900 mb-2">Content calendar</h1>
-        <p className="text-sm text-slate-500">
-          Scheduled posts will appear here once Buffer is connected (V1).
+        <h1 className="font-heading text-4xl text-white tracking-tight mb-2">
+          CALENDAR
+        </h1>
+        <p className="text-navy-400 text-sm">
+          Scheduled posts will appear here once Buffer is connected.
         </p>
       </div>
     </AppShell>

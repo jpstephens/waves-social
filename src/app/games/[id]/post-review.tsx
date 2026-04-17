@@ -2,9 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Check, Download, Loader2, Send } from "lucide-react";
 import type { Highlight, Post } from "@/lib/db/schema";
 
@@ -22,13 +19,23 @@ export function PostReview({
   useEffect(() => {
     if (post.renderStatus !== "rendering") return;
     const interval = setInterval(async () => {
-      const res = await fetch(`/api/posts/${post.id}/render`, { method: "POST" });
+      const res = await fetch(`/api/posts/${post.id}/render`, {
+        method: "POST",
+      });
       const json = await res.json();
       if (json.status === "ready") {
-        setPost((p) => ({ ...p, outputVideoUrl: json.url, renderStatus: "ready" }));
+        setPost((p) => ({
+          ...p,
+          outputVideoUrl: json.url,
+          renderStatus: "ready",
+        }));
         clearInterval(interval);
       } else if (json.status === "failed") {
-        setPost((p) => ({ ...p, renderStatus: "failed", errorMessage: json.error }));
+        setPost((p) => ({
+          ...p,
+          renderStatus: "failed",
+          errorMessage: json.error,
+        }));
         clearInterval(interval);
       }
     }, 5000);
@@ -51,7 +58,9 @@ export function PostReview({
   };
 
   const approve = async () => {
-    const res = await fetch(`/api/posts/${post.id}/approve`, { method: "POST" });
+    const res = await fetch(`/api/posts/${post.id}/approve`, {
+      method: "POST",
+    });
     if (res.ok) {
       setPost((p) => ({ ...p, status: "approved" }));
       toast.success("Approved");
@@ -67,10 +76,10 @@ export function PostReview({
     const json = await res.json();
     if (res.ok) {
       setPost((p) => ({ ...p, status: "published" }));
-      toast.success("Published to Buffer queue");
+      toast.success("Sent to Buffer queue");
     } else if (res.status === 501) {
       toast.info(
-        "Buffer not configured — use the Download button to post manually."
+        "Buffer not configured — use Download to post manually for now."
       );
     } else {
       toast.error(json.error ?? "Publish failed");
@@ -78,20 +87,30 @@ export function PostReview({
   };
 
   const mediaUrl = post.outputVideoUrl ?? post.outputImageUrl;
+  const statusColor =
+    post.status === "published"
+      ? "bg-cyan-400 text-navy-950"
+      : post.status === "approved"
+        ? "bg-navy-700 text-cyan-400"
+        : "bg-navy-800 text-navy-400";
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-      <div className="aspect-[9/16] max-h-[480px] bg-slate-900 relative">
+    <div className="rounded-xl border border-navy-800 bg-navy-900 overflow-hidden">
+      <div className="aspect-[9/16] max-h-[480px] bg-navy-950 relative flex items-center justify-center">
         {post.renderStatus === "rendering" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-white gap-2">
+          <div className="flex flex-col items-center text-cyan-400 gap-2">
             <Loader2 className="h-6 w-6 animate-spin" />
-            <span className="text-sm text-slate-300">Rendering video…</span>
+            <span className="text-xs uppercase tracking-[0.3em] font-bold">
+              Rendering…
+            </span>
           </div>
         )}
         {post.renderStatus === "failed" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-red-200 gap-2 p-4 text-center">
-            <span className="text-sm">Render failed</span>
-            <span className="text-xs opacity-75">{post.errorMessage}</span>
+          <div className="flex flex-col items-center gap-2 p-4 text-center">
+            <span className="text-red-400 text-sm uppercase tracking-wider font-bold">
+              Render failed
+            </span>
+            <span className="text-navy-400 text-xs">{post.errorMessage}</span>
           </div>
         )}
         {post.renderStatus === "ready" && post.outputVideoUrl && (
@@ -102,59 +121,64 @@ export function PostReview({
           />
         )}
         {post.renderStatus === "pending" && !mediaUrl && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm">
-            No clip uploaded — text-only post
+          <div className="text-navy-500 text-xs uppercase tracking-wider">
+            Text-only post — no clip uploaded
           </div>
         )}
       </div>
 
       <div className="p-4 space-y-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {highlight && (
-            <Badge variant="secondary">
+            <span className="bg-cyan-400/10 text-cyan-400 text-xs uppercase tracking-wider font-bold px-2.5 py-1 rounded">
               {highlight.headline}
-            </Badge>
+            </span>
           )}
-          <Badge
-            variant={post.status === "published" ? "default" : "outline"}
+          <span
+            className={`text-[10px] uppercase tracking-[0.2em] font-bold px-2.5 py-1 rounded ${statusColor}`}
           >
             {post.status}
-          </Badge>
+          </span>
         </div>
 
         {highlight && (
-          <div className="text-sm text-slate-600">
-            <strong>{highlight.statLine}</strong>
+          <div className="text-navy-300 text-sm font-mono">
+            {highlight.statLine}
           </div>
         )}
 
-        <Textarea
+        <textarea
           value={caption}
           onChange={(e) => setCaption(e.target.value)}
           rows={4}
-          className="text-sm"
+          className="w-full bg-navy-950 border border-navy-800 text-white text-sm rounded-lg p-3 focus:border-cyan-400 focus:outline-none"
         />
 
         <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
+          <button
             onClick={saveCaption}
             disabled={saving || caption === post.caption}
+            className="text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg bg-navy-800 text-white hover:bg-navy-700 disabled:opacity-50"
           >
             Save caption
-          </Button>
+          </button>
           {post.status === "draft" && (
-            <Button size="sm" onClick={approve}>
-              <Check className="h-4 w-4 mr-1" />
+            <button
+              onClick={approve}
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg bg-cyan-400 text-navy-950 hover:bg-cyan-300"
+            >
+              <Check className="h-3.5 w-3.5 mr-1" />
               Approve
-            </Button>
+            </button>
           )}
           {post.status === "approved" && (
-            <Button size="sm" onClick={publish}>
-              <Send className="h-4 w-4 mr-1" />
+            <button
+              onClick={publish}
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg bg-cyan-400 text-navy-950 hover:bg-cyan-300"
+            >
+              <Send className="h-3.5 w-3.5 mr-1" />
               Send to Buffer
-            </Button>
+            </button>
           )}
           {mediaUrl && (
             <a
@@ -162,9 +186,9 @@ export function PostReview({
               download
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[0.8rem] font-medium text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg border border-navy-700 text-navy-300 hover:border-cyan-400 hover:text-cyan-400"
             >
-              <Download className="h-4 w-4 mr-1" />
+              <Download className="h-3.5 w-3.5 mr-1" />
               Download
             </a>
           )}

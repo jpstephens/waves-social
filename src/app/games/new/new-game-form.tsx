@@ -4,10 +4,6 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { UploadCloud, FileText, Film, Images, X } from "lucide-react";
 
 export function NewGameForm() {
@@ -78,24 +74,24 @@ export function NewGameForm() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="opponent">Opponent</Label>
-          <Input
-            id="opponent"
+        <FieldLabel label="Opponent">
+          <input
             value={opponent}
             onChange={(e) => setOpponent(e.target.value)}
-            placeholder="e.g., Sharks"
+            placeholder="SHARKS"
+            className={inputCls}
+            style={{ fontFamily: "ui-monospace, monospace" }}
           />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="playedAt">Game date</Label>
-          <Input
-            id="playedAt"
+        </FieldLabel>
+        <FieldLabel label="Game date">
+          <input
             type="date"
             value={playedAt}
             onChange={(e) => setPlayedAt(e.target.value)}
+            className={inputCls}
+            style={{ fontFamily: "ui-monospace, monospace" }}
           />
-        </div>
+        </FieldLabel>
       </div>
 
       <Dropzone
@@ -119,25 +115,29 @@ export function NewGameForm() {
       </Dropzone>
 
       <div>
-        <Label className="mb-2 block">Photos (optional)</Label>
+        <FieldLabelText>Player photos (optional)</FieldLabelText>
         <div
           {...photoDropzone.getRootProps()}
-          className="rounded-lg border-2 border-dashed border-slate-300 p-6 text-center hover:border-slate-400 cursor-pointer bg-white"
+          className="rounded-lg border-2 border-dashed border-navy-800 hover:border-cyan-400/50 p-6 text-center cursor-pointer bg-navy-900 transition-colors"
         >
           <input {...photoDropzone.getInputProps()} />
-          <Images className="h-6 w-6 mx-auto text-slate-400 mb-2" />
-          <p className="text-sm text-slate-500">Drop player photos here</p>
+          <Images className="h-6 w-6 mx-auto text-navy-400 mb-2" />
+          <p className="text-sm text-navy-400 uppercase tracking-wider">
+            Drop player photos here
+          </p>
         </div>
         {photos.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-2">
             {photos.map((p, i) => (
               <li
                 key={i}
-                className="flex items-center gap-2 rounded-md bg-slate-100 px-3 py-1 text-xs"
+                className="flex items-center gap-2 rounded-md bg-navy-800 text-white px-3 py-1 text-xs"
               >
                 {p.name}
                 <button
-                  onClick={() => setPhotos((ps) => ps.filter((_, j) => j !== i))}
+                  onClick={() =>
+                    setPhotos((ps) => ps.filter((_, j) => j !== i))
+                  }
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -147,20 +147,49 @@ export function NewGameForm() {
         )}
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="notes">Coach notes (optional)</Label>
-        <Textarea
-          id="notes"
+      <FieldLabel label="Coach notes (optional)">
+        <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Anything the AI should emphasize? (e.g., first career hit for Sam)"
           rows={3}
+          className={inputCls + " font-sans"}
         />
-      </div>
+      </FieldLabel>
 
-      <Button onClick={onSubmit} disabled={submitting} size="lg" className="w-full">
+      <button
+        onClick={onSubmit}
+        disabled={submitting}
+        className="w-full bg-cyan-400 text-navy-950 py-4 rounded-lg font-heading text-lg uppercase tracking-wider hover:bg-cyan-300 active:bg-cyan-500 transition disabled:opacity-50"
+      >
         {submitting ? "Processing — this takes ~30s…" : "Generate highlights"}
-      </Button>
+      </button>
+    </div>
+  );
+}
+
+const inputCls =
+  "w-full bg-navy-900 border-2 border-navy-800 text-white px-4 py-3 rounded-lg uppercase font-bold focus:border-cyan-400 focus:outline-none transition-colors placeholder:text-navy-500";
+
+function FieldLabelText({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-cyan-400 text-xs font-bold uppercase tracking-[0.2em] mb-2">
+      {children}
+    </div>
+  );
+}
+
+function FieldLabel({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <FieldLabelText>{label}</FieldLabelText>
+      {children}
     </div>
   );
 }
@@ -181,17 +210,17 @@ function Dropzone({
 } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div>
-      <Label className="mb-2 block">{label}</Label>
+      <FieldLabelText>{label}</FieldLabelText>
       <div
         {...rootProps}
-        className="rounded-lg border-2 border-dashed border-slate-300 p-6 text-center hover:border-slate-400 cursor-pointer bg-white"
+        className="rounded-lg border-2 border-dashed border-navy-800 hover:border-cyan-400/50 p-6 text-center cursor-pointer bg-navy-900 transition-colors"
       >
         {children}
         {file ? (
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 text-white">
               {icon}
-              <span className="text-sm text-slate-700">{file.name}</span>
+              <span className="text-sm">{file.name}</span>
             </div>
             <button
               type="button"
@@ -199,14 +228,17 @@ function Dropzone({
                 e.stopPropagation();
                 onClear();
               }}
+              className="text-navy-400 hover:text-cyan-400"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-2 text-slate-500">
+          <div className="flex flex-col items-center gap-2 text-navy-400">
             <UploadCloud className="h-6 w-6" />
-            <span className="text-sm">Click or drop</span>
+            <span className="text-xs uppercase tracking-wider">
+              Click or drop
+            </span>
           </div>
         )}
       </div>

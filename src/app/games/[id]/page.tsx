@@ -20,33 +20,37 @@ export default async function GamePage({
   if (!game) notFound();
 
   const postList = await db
-    .select({
-      post: posts,
-      highlight: highlights,
-    })
+    .select({ post: posts, highlight: highlights })
     .from(posts)
     .leftJoin(highlights, eq(posts.highlightId, highlights.id))
     .where(eq(posts.gameId, id));
 
+  const won =
+    game.teamScore != null &&
+    game.opponentScore != null &&
+    game.teamScore > game.opponentScore;
+
   return (
-    <AppShell>
+    <AppShell subtitle={`vs ${game.opponent}`}>
       <div className="mx-auto max-w-5xl p-8">
-        <div className="mb-6">
-          <div className="text-sm text-slate-500">
+        <div className="mb-8">
+          <div className="text-cyan-400 text-xs uppercase tracking-[0.3em] font-bold">
             {format(game.playedAt, "EEEE, MMMM d, yyyy")}
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            vs {game.opponent}{" "}
-            {game.teamScore != null && game.opponentScore != null && (
-              <span className="text-slate-500 font-normal">
-                — {game.teamScore}&ndash;{game.opponentScore}
-              </span>
-            )}
+          <h1 className="font-heading text-4xl text-white tracking-tight mt-1">
+            VS {game.opponent.toUpperCase()}
           </h1>
+          {game.teamScore != null && game.opponentScore != null && (
+            <div
+              className={`font-heading text-3xl mt-2 ${won ? "text-cyan-400" : "text-navy-300"}`}
+            >
+              {won ? "W" : "L"} {game.teamScore}–{game.opponentScore}
+            </div>
+          )}
         </div>
 
         {postList.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-500">
+          <div className="rounded-xl border-2 border-dashed border-navy-800 bg-navy-900/50 p-12 text-center text-navy-400 uppercase tracking-wider">
             No highlights generated yet.
           </div>
         ) : (

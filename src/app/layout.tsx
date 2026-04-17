@@ -1,22 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "Coach OS — Waves 8U",
-  description: "Post-game highlights pipeline for the Waves.",
+  title: "Waves Press Box",
+  description: "Post-game highlights for the Waves 8U.",
 };
 
 export default function RootLayout({
@@ -25,14 +14,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
-      <html
-        lang="en"
-        className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-      >
-        <body className="min-h-full flex flex-col bg-background text-foreground">
+    <ClerkProvider
+      appearance={{
+        variables: {
+          colorPrimary: "#22d3ee",
+          colorBackground: "#0f2337",
+          colorText: "#fafaf9",
+          colorInputBackground: "#0a1929",
+          colorInputText: "#fafaf9",
+          borderRadius: "0.5rem",
+        },
+      }}
+    >
+      <html lang="en" className="h-full antialiased">
+        <body className="min-h-full flex flex-col bg-navy-950 text-white">
           {children}
-          <Toaster richColors position="top-right" />
+          <Toaster richColors theme="dark" position="top-right" />
         </body>
       </html>
     </ClerkProvider>

@@ -6,12 +6,14 @@ export const dynamic = "force-dynamic";
 export default async function TemplatesPage() {
   await requireCoach();
   return (
-    <AppShell>
+    <AppShell subtitle="Templates">
       <div className="mx-auto max-w-3xl p-8">
-        <h1 className="text-2xl font-bold text-slate-900 mb-2">Templates</h1>
-        <p className="text-sm text-slate-500">
-          The MVP uses a single built-in Reels template (intro → clip → outro,
-          overlay with player name + stat line). Multi-template UI ships in V2.
+        <h1 className="font-heading text-4xl text-white tracking-tight mb-2">
+          TEMPLATES
+        </h1>
+        <p className="text-navy-400 text-sm">
+          MVP uses a built-in 9:16 Reels template (intro → clip → outro). Image
+          + multi-template UI lands next.
         </p>
       </div>
     </AppShell>

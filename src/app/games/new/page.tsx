@@ -7,11 +7,13 @@ export const dynamic = "force-dynamic";
 export default async function NewGamePage() {
   await requireCoach();
   return (
-    <AppShell>
+    <AppShell subtitle="New Game">
       <div className="mx-auto max-w-2xl p-8">
-        <h1 className="text-2xl font-bold text-slate-900 mb-1">New Game</h1>
-        <p className="text-sm text-slate-500 mb-6">
-          Drop in the box score PDF and a highlight clip. We&apos;ll handle the rest.
+        <h1 className="font-heading text-4xl text-white tracking-tight mb-1">
+          NEW GAME
+        </h1>
+        <p className="text-navy-400 text-sm mb-8">
+          Drop the box score PDF and a highlight clip. We&apos;ll handle the rest.
         </p>
         <NewGameForm />
       </div>
