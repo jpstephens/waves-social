@@ -1,24 +1,30 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
+loadEnv({ path: ".env.local" });
+loadEnv({ path: ".env" });
+
 import { db, teams, players } from "./index";
 import { eq } from "drizzle-orm";
 
-// Real Waves 8U roster (inferred from Apr 11, 2026 box score).
-// Fill in correct first names and any missing last-name spellings, then re-run.
+// Waves 8U full roster.
 const ROSTER: Array<{
   firstName: string;
   lastName?: string;
   jerseyNumber?: number;
   primaryPosition?: string;
 }> = [
-  { firstName: "Lucas", lastName: "Stephens", jerseyNumber: 1, primaryPosition: "1B" },
-  { firstName: "TBD-T", lastName: "Koumoulis", jerseyNumber: 2, primaryPosition: "P" },
-  { firstName: "TBD-J", lastName: "Rivera", jerseyNumber: 9, primaryPosition: "3B" },
-  { firstName: "TBD-C", lastName: "Labossiere", jerseyNumber: 13, primaryPosition: "CF" },
-  { firstName: "TBD-A", lastName: "Fioretti", jerseyNumber: 15, primaryPosition: "SS" },
-  { firstName: "TBD-M", lastName: "Roecklein", jerseyNumber: 17, primaryPosition: "RF" },
-  { firstName: "TBD-C", lastName: "Lempens", jerseyNumber: 19, primaryPosition: "C" },
-  { firstName: "TBD-J", lastName: "Pescuma", jerseyNumber: 21, primaryPosition: "LF" },
-  { firstName: "TBD-N", lastName: "Nachmias", jerseyNumber: 31, primaryPosition: "2B" },
+  { firstName: "Luke", lastName: "Stephens", jerseyNumber: 1, primaryPosition: "P" },
+  { firstName: "Theo", lastName: "Koumoulis", jerseyNumber: 2, primaryPosition: "P" },
+  { firstName: "Owen", lastName: "Henning", jerseyNumber: 3, primaryPosition: "P" },
+  { firstName: "Ryan", lastName: "McAward", jerseyNumber: 7 },
+  { firstName: "James", lastName: "Rivera", jerseyNumber: 9, primaryPosition: "P" },
+  { firstName: "Julian", lastName: "Capeci", jerseyNumber: 12 },
+  { firstName: "Christian", lastName: "Labossiere", jerseyNumber: 13 },
+  { firstName: "Andrew", lastName: "Fioretti", jerseyNumber: 15, primaryPosition: "P" },
+  { firstName: "Mikey", lastName: "Roecklein", jerseyNumber: 17 },
+  { firstName: "Christopher", lastName: "Lempenski", jerseyNumber: 19 },
+  { firstName: "Jeremy", lastName: "Pescuma", jerseyNumber: 21 },
+  { firstName: "Timmy", lastName: "Meahan", jerseyNumber: 23 },
+  { firstName: "Noah", lastName: "Nachmias", jerseyNumber: 31 },
 ];
 
 async function main() {
@@ -51,14 +57,29 @@ async function main() {
     .from(players)
     .where(eq(players.teamId, team.id));
 
-  if (currentPlayers.length === 0) {
-    await db
-      .insert(players)
-      .values(ROSTER.map((p) => ({ ...p, teamId: team.id })));
-    console.log(`Seeded ${ROSTER.length} roster entries.`);
-  } else {
-    console.log(`Roster already has ${currentPlayers.length} players — skipped.`);
+  // Upsert by jersey number so re-running picks up roster updates.
+  let inserted = 0;
+  let updated = 0;
+  for (const entry of ROSTER) {
+    const match = currentPlayers.find(
+      (p) => p.jerseyNumber === entry.jerseyNumber
+    );
+    if (match) {
+      await db
+        .update(players)
+        .set({
+          firstName: entry.firstName,
+          lastName: entry.lastName,
+          primaryPosition: entry.primaryPosition,
+        })
+        .where(eq(players.id, match.id));
+      updated++;
+    } else {
+      await db.insert(players).values({ ...entry, teamId: team.id });
+      inserted++;
+    }
   }
+  console.log(`Roster: ${inserted} inserted, ${updated} updated.`);
 }
 
 main()
