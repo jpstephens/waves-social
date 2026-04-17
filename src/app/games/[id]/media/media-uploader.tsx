@@ -6,6 +6,18 @@ import { toast } from "sonner";
 import { Loader2, RefreshCcw, UploadCloud, Download } from "lucide-react";
 import type { Highlight } from "@/lib/db/schema";
 
+// Vercel Blob URLs for private stores can't be loaded directly in the browser
+// (no auth). Route through our server proxy at /api/blob/[...path].
+function toProxySrc(rawUrl: string | null): string | null {
+  if (!rawUrl) return null;
+  try {
+    const pathname = new URL(rawUrl).pathname.replace(/^\/+/, "");
+    return `/api/blob/${pathname}`;
+  } catch {
+    return rawUrl;
+  }
+}
+
 const KIND_LABEL: Record<string, string> = {
   extra_base_hit: "Extra-base hit",
   rbi: "RBI",
@@ -151,7 +163,7 @@ export function MediaUploader({
             )}
             {generatedUrl && (
               <a
-                href={generatedUrl}
+                href={toProxySrc(generatedUrl) ?? generatedUrl}
                 download
                 target="_blank"
                 rel="noreferrer"
@@ -172,7 +184,7 @@ export function MediaUploader({
             ) : generatedUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={generatedUrl}
+                src={toProxySrc(generatedUrl) ?? generatedUrl}
                 alt={`${playerName} post`}
                 className="w-full h-full object-cover"
               />
