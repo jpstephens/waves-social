@@ -29,6 +29,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Read the PDF bytes once — we'll upload to Blob AND pass directly to the
+    // AI step. This avoids re-fetching from Blob (which 403s on private stores).
+    const pdfBuffer = Buffer.from(await pdf.arrayBuffer());
+
     let pdfUpload;
     try {
       pdfUpload = await uploadToBlob({
@@ -57,14 +61,14 @@ export async function POST(req: NextRequest) {
       .returning();
 
     try {
-      await proposeHighlights(game.id);
+      await proposeHighlights(game.id, pdfBuffer);
     } catch (err) {
       console.error("propose failed", err);
       return NextResponse.json(
         {
           gameId: game.id,
           warning: "Game saved, but AI proposals failed.",
-          error: `${err instanceof Error ? err.message : String(err)}. Likely cause: AI Gateway not enabled on this Vercel project.`,
+          error: err instanceof Error ? err.message : String(err),
         },
         { status: 202 }
       );

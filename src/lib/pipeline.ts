@@ -76,23 +76,39 @@ async function findPlayer(
 /**
  * STEP 1: Read the box score, propose a list of post candidates.
  * No posts created, no media generated. Coach reviews and selects from these.
+ *
+ * Pass `pdfBuffer` to skip re-fetching from Blob (recommended on first run,
+ * since private blobs return 403 to bare fetch). If omitted, falls back to
+ * fetching the stored URL — works for public blobs only.
  */
-export async function proposeHighlights(gameId: string) {
+export async function proposeHighlights(
+  gameId: string,
+  pdfBuffer?: Buffer
+) {
   const game = (await db.select().from(games).where(eq(games.id, gameId)))[0];
   if (!game) throw new Error(`game ${gameId} not found`);
-  if (!game.boxScorePdfUrl) throw new Error("game has no box score PDF");
+  if (!game.boxScorePdfUrl && !pdfBuffer) {
+    throw new Error("game has no box score PDF");
+  }
 
   const team = (await db.select().from(teams).where(eq(teams.id, game.teamId)))[0];
   if (!team) throw new Error("team not found");
 
   const roster = await db.select().from(players).where(eq(players.teamId, team.id));
 
-  // Extract box score via LLM
-  const pdfRes = await fetch(game.boxScorePdfUrl);
-  if (!pdfRes.ok) throw new Error(`failed to fetch PDF: ${pdfRes.status}`);
-  const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+  let buf = pdfBuffer;
+  if (!buf) {
+    const pdfRes = await fetch(game.boxScorePdfUrl!);
+    if (!pdfRes.ok) {
+      throw new Error(
+        `failed to fetch PDF: ${pdfRes.status} (private Blob URLs are not fetchable without auth — pass pdfBuffer instead)`
+      );
+    }
+    buf = Buffer.from(await pdfRes.arrayBuffer());
+  }
+
   const extracted = await extractBoxScore({
-    pdfBuffer,
+    pdfBuffer: buf,
     coachTeamName: team.name,
   });
 
