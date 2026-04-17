@@ -73,7 +73,11 @@ async function findPlayer(
   return null;
 }
 
-export async function processGame(gameId: string) {
+/**
+ * STEP 1: Read the box score, propose a list of post candidates.
+ * No posts created, no media generated. Coach reviews and selects from these.
+ */
+export async function proposeHighlights(gameId: string) {
   const game = (await db.select().from(games).where(eq(games.id, gameId)))[0];
   if (!game) throw new Error(`game ${gameId} not found`);
   if (!game.boxScorePdfUrl) throw new Error("game has no box score PDF");
@@ -83,7 +87,7 @@ export async function processGame(gameId: string) {
 
   const roster = await db.select().from(players).where(eq(players.teamId, team.id));
 
-  // 1. Extract box score via LLM
+  // Extract box score via LLM
   const pdfRes = await fetch(game.boxScorePdfUrl);
   if (!pdfRes.ok) throw new Error(`failed to fetch PDF: ${pdfRes.status}`);
   const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
@@ -101,7 +105,6 @@ export async function processGame(gameId: string) {
     })
     .where(eq(games.id, gameId));
 
-  // 2. Pick highlights with fair rotation
   const rotationBoost = computeRotationBoost(roster);
   const picks = await pickHighlights({
     boxScore: extracted,
@@ -110,11 +113,7 @@ export async function processGame(gameId: string) {
     rotationBoost,
   });
 
-  // 3. Persist highlights + drafts
-  const clipUrl = game.clipUrls[0];
-  const brand = team.brand ?? { primary: "#0EA5E9", secondary: "#0F172A" };
-  const createdPosts: string[] = [];
-
+  const proposedIds: string[] = [];
   for (const pick of picks.picks) {
     const playerRef = await findPlayer(team.id, {
       name: pick.playerName,
@@ -126,14 +125,55 @@ export async function processGame(gameId: string) {
       .values({
         gameId,
         playerId: playerRef?.id,
+        status: "proposed",
         kind: pick.kind,
         statLine: pick.statLine,
         headline: pick.headline,
         caption: pick.caption,
         overlayText: pick.overlayText,
-        sourceMediaUrl: clipUrl,
+        playerNameRaw: pick.playerName,
+        jerseyNumber: pick.jerseyNumber,
       })
       .returning();
+    proposedIds.push(h.id);
+  }
+
+  return { proposedIds };
+}
+
+/**
+ * STEP 2: Coach selected which proposals to keep. For each selected highlight,
+ * create a post and (if a clip is attached) kick off a Shotstack render.
+ *
+ * This is intentionally separate from proposeHighlights so the coach can curate
+ * before any media is generated.
+ */
+export async function generatePostsForSelected(gameId: string) {
+  const game = (await db.select().from(games).where(eq(games.id, gameId)))[0];
+  if (!game) throw new Error(`game ${gameId} not found`);
+  const team = (await db.select().from(teams).where(eq(teams.id, game.teamId)))[0];
+  if (!team) throw new Error("team not found");
+
+  const selected = await db
+    .select()
+    .from(highlights)
+    .where(eq(highlights.gameId, gameId));
+
+  const brand = team.brand ?? { primary: "#0EA5E9", secondary: "#0F172A" };
+  const clipUrl = game.clipUrls[0];
+  const createdPostIds: string[] = [];
+
+  for (const h of selected) {
+    if (h.status !== "selected") continue;
+
+    // Skip if a post already exists for this highlight
+    const existing = await db
+      .select()
+      .from(posts)
+      .where(eq(posts.highlightId, h.id));
+    if (existing.length > 0) continue;
+
+    const sourceClip = h.sourceMediaUrl ?? clipUrl;
 
     const [p] = await db
       .insert(posts)
@@ -141,22 +181,20 @@ export async function processGame(gameId: string) {
         gameId,
         highlightId: h.id,
         kind: "spotlight",
-        caption: pick.caption,
+        caption: h.caption,
         status: "draft",
-        renderStatus: clipUrl && process.env.SHOTSTACK_API_KEY ? "pending" : "pending",
+        renderStatus: "pending",
       })
       .returning();
+    createdPostIds.push(p.id);
 
-    createdPosts.push(p.id);
-
-    // 4. Kick off render if we have a clip + Shotstack configured
-    if (clipUrl && process.env.SHOTSTACK_API_KEY) {
+    if (sourceClip && process.env.SHOTSTACK_API_KEY) {
       try {
         const { renderId } = await submitRender({
-          clipUrl,
-          headline: pick.headline,
-          overlayText: pick.overlayText,
-          playerName: pick.playerName,
+          clipUrl: sourceClip,
+          headline: h.headline,
+          overlayText: h.overlayText,
+          playerName: h.playerNameRaw ?? "",
           teamName: team.name,
           brand: {
             primary: brand.primary,
@@ -179,8 +217,7 @@ export async function processGame(gameId: string) {
       }
     }
   }
-
-  return { postIds: createdPosts };
+  return { createdPostIds };
 }
 
 export async function pollRenderAndStore(postId: string) {

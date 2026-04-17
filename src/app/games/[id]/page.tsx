@@ -1,9 +1,9 @@
 import { notFound } from "next/navigation";
 import { format } from "date-fns";
-import { eq } from "drizzle-orm";
-import { db, games, highlights, posts } from "@/lib/db";
+import { eq, asc } from "drizzle-orm";
+import { db, games, highlights, players } from "@/lib/db";
 import { AppShell } from "@/components/app-shell";
-import { PostReview } from "./post-review";
+import { ProposalReview } from "./proposal-review";
 import { requireCoach } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -19,11 +19,12 @@ export default async function GamePage({
   const [game] = await db.select().from(games).where(eq(games.id, id));
   if (!game) notFound();
 
-  const postList = await db
-    .select({ post: posts, highlight: highlights })
-    .from(posts)
-    .leftJoin(highlights, eq(posts.highlightId, highlights.id))
-    .where(eq(posts.gameId, id));
+  const proposalRows = await db
+    .select({ highlight: highlights, player: players })
+    .from(highlights)
+    .leftJoin(players, eq(highlights.playerId, players.id))
+    .where(eq(highlights.gameId, id))
+    .orderBy(asc(highlights.createdAt));
 
   const won =
     game.teamScore != null &&
@@ -32,7 +33,7 @@ export default async function GamePage({
 
   return (
     <AppShell subtitle={`vs ${game.opponent}`}>
-      <div className="mx-auto max-w-5xl p-8">
+      <div className="mx-auto max-w-4xl p-8">
         <div className="mb-8">
           <div className="text-cyan-400 text-xs uppercase tracking-[0.3em] font-bold">
             {format(game.playedAt, "EEEE, MMMM d, yyyy")}
@@ -49,21 +50,16 @@ export default async function GamePage({
           )}
         </div>
 
-        {postList.length === 0 ? (
-          <div className="rounded-xl border-2 border-dashed border-navy-800 bg-navy-900/50 p-12 text-center text-navy-400 uppercase tracking-wider">
-            No highlights generated yet.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {postList.map(({ post, highlight }) => (
-              <PostReview
-                key={post.id}
-                initialPost={post}
-                highlight={highlight}
-              />
-            ))}
-          </div>
-        )}
+        <ProposalReview
+          gameId={id}
+          initialProposals={proposalRows.map((r) => ({
+            highlight: r.highlight,
+            playerName: r.player
+              ? `${r.player.firstName} ${r.player.lastName ?? ""}`.trim()
+              : (r.highlight.playerNameRaw ?? "Unknown"),
+            jerseyNumber: r.player?.jerseyNumber ?? r.highlight.jerseyNumber,
+          }))}
+        />
       </div>
     </AppShell>
   );

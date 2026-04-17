@@ -83,6 +83,12 @@ export const games = pgTable("games", {
     .defaultNow(),
 });
 
+export const highlightStatus = pgEnum("highlight_status", [
+  "proposed",
+  "selected",
+  "rejected",
+]);
+
 export const highlights = pgTable("highlights", {
   id: uuid("id").primaryKey().defaultRandom(),
   gameId: uuid("game_id")
@@ -91,11 +97,14 @@ export const highlights = pgTable("highlights", {
   playerId: uuid("player_id").references(() => players.id, {
     onDelete: "set null",
   }),
+  status: highlightStatus("status").notNull().default("proposed"),
   kind: text("kind").notNull(),
   statLine: text("stat_line"),
   headline: text("headline").notNull(),
   caption: text("caption").notNull(),
   overlayText: text("overlay_text").notNull(),
+  playerNameRaw: text("player_name_raw"),
+  jerseyNumber: integer("jersey_number"),
   sourceMediaUrl: text("source_media_url"),
   rotationBoost: integer("rotation_boost").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
