@@ -106,6 +106,10 @@ export const highlights = pgTable("highlights", {
   playerNameRaw: text("player_name_raw"),
   jerseyNumber: integer("jersey_number"),
   sourceMediaUrl: text("source_media_url"),
+  photoUrl: text("photo_url"),
+  backgroundUrl: text("background_url"),
+  generatedImageUrl: text("generated_image_url"),
+  imagePrompt: text("image_prompt"),
   rotationBoost: integer("rotation_boost").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()

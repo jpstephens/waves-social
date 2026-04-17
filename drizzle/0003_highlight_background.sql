@@ -1,0 +1,1 @@
+ALTER TABLE "highlights" ADD COLUMN "background_url" text;

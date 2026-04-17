@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 import { Check, X, ChevronDown, ChevronUp } from "lucide-react";
 import type { Highlight } from "@/lib/db/schema";
 
@@ -29,6 +29,7 @@ export function ProposalReview({
   gameId: string;
   initialProposals: Proposal[];
 }) {
+  const router = useRouter();
   const [proposals, setProposals] = useState(initialProposals);
 
   const selectedCount = proposals.filter(
@@ -95,7 +96,7 @@ export function ProposalReview({
         </div>
         <button
           disabled={selectedCount === 0}
-          onClick={() => toast.info("Next step: upload media for each selected post (coming next).")}
+          onClick={() => router.push(`/games/${gameId}/media`)}
           className="bg-cyan-400 text-navy-950 px-5 py-3 rounded-lg font-heading text-sm uppercase tracking-wider hover:bg-cyan-300 disabled:opacity-30 disabled:cursor-not-allowed transition"
         >
           Continue with {selectedCount}

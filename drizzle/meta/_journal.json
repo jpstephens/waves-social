@@ -15,6 +15,20 @@
       "when": 1776455926863,
       "tag": "0001_highlights_status",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776457339049,
+      "tag": "0002_highlight_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776457541725,
+      "tag": "0003_highlight_background",
+      "breakpoints": true
     }
   ]
 }
