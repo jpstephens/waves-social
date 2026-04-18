@@ -10,6 +10,8 @@ import {
   Download,
   Check,
   CalendarClock,
+  Maximize2,
+  X,
 } from "lucide-react";
 import type { Highlight, Post } from "@/lib/db/schema";
 import {
@@ -62,6 +64,7 @@ export function MediaUploader({
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleValue, setScheduleValue] = useState<string>(defaultScheduleValue());
   const [publishing, setPublishing] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const onDrop = useCallback((files: File[]) => {
     if (files[0]) setPhotoFile(files[0]);
@@ -323,16 +326,25 @@ export function MediaUploader({
 
         {/* Right: preview */}
         <div className="w-48 flex-shrink-0">
-          <div className="aspect-[9/16] rounded-lg bg-navy-950 border border-navy-800 overflow-hidden flex items-center justify-center">
+          <div className="relative aspect-[9/16] rounded-lg bg-navy-950 border border-navy-800 overflow-hidden flex items-center justify-center group">
             {generating ? (
               <Loader2 className="h-6 w-6 text-cyan-400 animate-spin" />
             ) : generatedUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={generatedUrl}
-                alt={`${playerName} post`}
-                className="w-full h-full object-cover"
-              />
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={generatedUrl}
+                  alt={`${playerName} post`}
+                  className="w-full h-full object-cover"
+                />
+                <button
+                  onClick={() => setFullscreen(true)}
+                  title="Fullscreen preview"
+                  className="absolute top-1.5 right-1.5 bg-navy-950/80 text-white rounded p-1.5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-cyan-400 hover:text-navy-950"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                </button>
+              </>
             ) : (
               <div className="text-navy-500 text-[10px] uppercase tracking-wider text-center px-2">
                 Preview will appear here
@@ -341,6 +353,27 @@ export function MediaUploader({
           </div>
         </div>
       </div>
+
+      {fullscreen && generatedUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setFullscreen(false)}
+        >
+          <button
+            onClick={() => setFullscreen(false)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white bg-navy-950/60 rounded-full p-2"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={generatedUrl}
+            alt={`${playerName} post fullscreen`}
+            className="max-h-[95vh] max-w-[95vw] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
         <DialogContent className="sm:max-w-md">

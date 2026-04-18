@@ -95,37 +95,37 @@ function buildTextSvg({
   );
   const stat = escapeXml(statLine);
 
-  // Background panel with cyan top border for readability over busy templates
+  // Use sans-serif (guaranteed available on Vercel Linux via DejaVu Sans etc).
+  // Impact/Haettenschweiler are not installed on the runtime, so text falls
+  // back to zero-width glyphs and the overlay appears blank.
+  const FONT_DISPLAY = "sans-serif";
+  const FONT_MONO = "monospace";
+
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <defs>
     <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="${NAVY}" stop-opacity="0"/>
-      <stop offset="40%" stop-color="${NAVY}" stop-opacity="0.85"/>
-      <stop offset="100%" stop-color="${NAVY}" stop-opacity="0.95"/>
+      <stop offset="35%" stop-color="${NAVY}" stop-opacity="0.88"/>
+      <stop offset="100%" stop-color="${NAVY}" stop-opacity="0.98"/>
     </linearGradient>
   </defs>
 
   <rect x="0" y="0" width="${width}" height="${height}" fill="url(#panel)"/>
-  <rect x="0" y="0" width="${width}" height="6" fill="${CYAN}"/>
+  <rect x="0" y="30" width="${width}" height="6" fill="${CYAN}"/>
 
-  <text x="${width / 2}" y="160" text-anchor="middle"
-        font-family="Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif"
-        font-size="92" fill="${WHITE}" letter-spacing="2">
-    ${headlineUpper}
-  </text>
+  <text x="${width / 2}" y="170" text-anchor="middle"
+        font-family="${FONT_DISPLAY}" font-weight="900"
+        font-size="84" fill="${WHITE}" letter-spacing="2"
+        style="text-transform: uppercase;">${headlineUpper}</text>
 
-  <text x="${width / 2}" y="290" text-anchor="middle"
-        font-family="Impact, Haettenschweiler, sans-serif"
-        font-size="56" fill="${CYAN}" letter-spacing="6">
-    ${nameLine}
-  </text>
+  <text x="${width / 2}" y="300" text-anchor="middle"
+        font-family="${FONT_DISPLAY}" font-weight="800"
+        font-size="52" fill="${CYAN}" letter-spacing="8">${nameLine}</text>
 
-  <text x="${width / 2}" y="380" text-anchor="middle"
-        font-family="ui-monospace, 'SF Mono', Menlo, monospace"
-        font-size="44" fill="${WHITE}" opacity="0.95">
-    ${stat}
-  </text>
+  <text x="${width / 2}" y="400" text-anchor="middle"
+        font-family="${FONT_MONO}" font-weight="700"
+        font-size="42" fill="${WHITE}" opacity="0.95">${stat}</text>
 </svg>`;
   return Buffer.from(svg);
 }
