@@ -1,32 +1,51 @@
 import { generateText } from "ai";
+import type { PostFormat } from "@/lib/db/schema";
 
 /**
  * Nano Banana = Google's Gemini image generation model family.
  *
- * In this app we use Nano Banana to generate BACKGROUND PLATES only —
- * no people, no text, no logos. The player photo and all branded text
- * are composited deterministically by lib/compose.ts so:
- *   - the kid's face is never altered by AI
- *   - brand colors / logo / text rendering are pixel-perfect every time
- *
- * Called via Vercel AI Gateway (uses AI_GATEWAY_API_KEY).
+ * Generates BACKGROUND PLATES only — no people, no text, no logos. The player
+ * photo and all branded text are composited deterministically by lib/compose.ts
+ * so the kid's face is never altered by AI.
  */
 
 const MODEL = "google/gemini-2.5-flash-image";
 
 export type GenerateBackgroundInput = {
-  /** highlight kind — drives the prompt template */
   kind: string;
+  format: PostFormat;
+};
+
+const FORMAT_DIMS: Record<PostFormat, { w: number; h: number; aspect: string; zone: string }> = {
+  feed: {
+    w: 1080,
+    h: 1350,
+    aspect: "4:5 portrait",
+    zone: "a large empty rectangular zone (~720x820px) in the upper-center — leave that area pure background so a player photo can be composited there later. Reserve the bottom ~30% for a dark panel overlay we'll add in code",
+  },
+  square: {
+    w: 1080,
+    h: 1080,
+    aspect: "1:1 square",
+    zone: "a large empty rectangular zone (~640x660px) in the upper-center — leave that area pure background. Reserve the bottom ~30% for a dark panel we'll add in code",
+  },
+  story: {
+    w: 1080,
+    h: 1920,
+    aspect: "9:16 vertical",
+    zone: "a large empty rectangular zone (~600x800px) in the upper-center. Reserve the bottom ~35% for a dark panel we'll add in code",
+  },
 };
 
 export async function generateBackground({
   kind,
+  format,
 }: GenerateBackgroundInput): Promise<{
   imageBuffer: Buffer;
   mediaType: string;
   prompt: string;
 }> {
-  const prompt = buildBackgroundPrompt(kind);
+  const prompt = buildBackgroundPrompt(kind, format);
 
   const result = await generateText({
     model: MODEL,
@@ -53,24 +72,16 @@ export async function generateBackground({
   };
 }
 
-/**
- * Per-highlight-kind background prompt.
- * Common rules:
- *   - 9:16 vertical, 1080x1920
- *   - Navy #0a1929 + cyan #22d3ee palette ONLY
- *   - Big empty zone in upper-center for player photo composite (do NOT fill it)
- *   - No people, no text, no logos, no HUD frames, no fake stat boxes
- *   - Modern broadcast aesthetic, kid-friendly (not aggressive)
- */
-export function buildBackgroundPrompt(kind: string): string {
+export function buildBackgroundPrompt(kind: string, format: PostFormat): string {
+  const dims = FORMAT_DIMS[format];
   const COMMON_TAIL = `
 
 Strict requirements:
-- 9:16 vertical canvas, 1080x1920.
-- Use ONLY these two colors as the palette: deep navy #0a1929 (background) and electric cyan #22d3ee (accent / glow / lines). No other hues.
-- Reserve a large empty rectangular zone (approximately 600x800px) in the upper-center of the canvas — leave that area pure background so a player photo can be composited there later.
+- ${dims.aspect} canvas, ${dims.w}x${dims.h}.
+- Use ONLY these two colors: deep navy #0a1929 (background) and electric cyan #22d3ee (accent / glow / lines). No other hues.
+- Reserve ${dims.zone}.
 - DO NOT include people, faces, silhouettes, players, hands, or any human figures.
-- DO NOT add any text, numbers, letters, scoreboards, stat boxes, or HUD frames.
+- DO NOT add text, numbers, letters, scoreboards, stat boxes, or HUD frames.
 - DO NOT add logos, watermarks, or fake sponsor marks.
 - DO NOT use baseball stitching textures or red colors.
 - Modern ESPN/MLB Network broadcast graphic style. Cinematic, premium, kid-friendly.`;
@@ -78,19 +89,19 @@ Strict requirements:
   switch (kind) {
     case "extra_base_hit":
     case "rbi":
-      return `Vertical 9:16 sports background. A dark baseball stadium at night seen from behind home plate. The white chalk lines of the batter's box and home plate are visible at the bottom of the frame. Electric cyan light beams shoot upward from the chalk lines into the navy night sky, with subtle particles and motion. Top half is mostly empty negative space.${COMMON_TAIL}`;
+      return `${dims.aspect} sports background. A dark baseball stadium at night seen from behind home plate. The white chalk lines of the batter's box and home plate are visible at the bottom of the frame. Electric cyan light beams shoot upward from the chalk lines into the navy night sky, with subtle particles and motion. Top half is mostly empty negative space.${COMMON_TAIL}`;
 
     case "pitching":
-      return `Vertical 9:16 sports background. The pitcher's mound seen from behind, illuminated by a single dramatic cyan spotlight from above. Dirt mound in the lower third with the pitching rubber visible. Dark navy night sky with soft cyan light streaks descending. Large empty area in the upper-center for a player portrait.${COMMON_TAIL}`;
+      return `${dims.aspect} sports background. The pitcher's mound seen from behind, illuminated by a single dramatic cyan spotlight from above. Dirt mound in the lower third with the pitching rubber visible. Dark navy night sky with soft cyan light streaks descending. Large empty area in the upper-center for a player portrait.${COMMON_TAIL}`;
 
     case "stolen_base":
-      return `Vertical 9:16 sports background. A baseball basepath seen at a dramatic low angle, with chalk-line baseline running diagonally across the lower half. Cyan motion blur streaks suggest speed. Navy field at night, soft cyan stadium lights bleeding in from the top edges. Upper-center kept empty.${COMMON_TAIL}`;
+      return `${dims.aspect} sports background. A baseball basepath seen at a dramatic low angle, with chalk-line baseline running diagonally across the lower half. Cyan motion blur streaks suggest speed. Navy field at night, soft cyan stadium lights bleeding in from the top edges. Upper-center kept empty.${COMMON_TAIL}`;
 
     case "milestone":
     case "teamwork":
-      return `Vertical 9:16 sports background. An abstract dark navy field with a soft cyan radial glow centered slightly above middle. Subtle wave pattern (ocean theme — the team is called the Waves) in the bottom 20% only. Mostly empty negative space with a calm, celebratory mood.${COMMON_TAIL}`;
+      return `${dims.aspect} sports background. An abstract dark navy field with a soft cyan radial glow centered slightly above middle. Subtle wave pattern (ocean theme — the team is called the Waves) in the bottom 20% only. Mostly empty negative space with a calm, celebratory mood.${COMMON_TAIL}`;
 
     default:
-      return `Vertical 9:16 sports background. Dark navy gradient with soft cyan light streaks angling diagonally from upper-right. Subtle baseball field chalk marks at the very bottom edge. Large empty area in the upper-center for a player photo to be composited later.${COMMON_TAIL}`;
+      return `${dims.aspect} sports background. Dark navy gradient with soft cyan light streaks angling diagonally from upper-right. Subtle baseball field chalk marks at the very bottom edge. Large empty area in the upper-center for a player photo to be composited later.${COMMON_TAIL}`;
   }
 }

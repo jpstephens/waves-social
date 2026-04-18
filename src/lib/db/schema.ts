@@ -10,6 +10,9 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
+export type PostFormat = "feed" | "square" | "story";
+export const POST_FORMATS: PostFormat[] = ["feed", "square", "story"];
+
 export const postStatus = pgEnum("post_status", [
   "draft",
   "approved",
@@ -108,7 +111,15 @@ export const highlights = pgTable("highlights", {
   sourceMediaUrl: text("source_media_url"),
   photoUrl: text("photo_url"),
   backgroundUrl: text("background_url"),
+  backgrounds: jsonb("backgrounds")
+    .$type<Partial<Record<PostFormat, string>>>()
+    .notNull()
+    .default({}),
   generatedImageUrl: text("generated_image_url"),
+  generatedImages: jsonb("generated_images")
+    .$type<Partial<Record<PostFormat, string>>>()
+    .notNull()
+    .default({}),
   imagePrompt: text("image_prompt"),
   rotationBoost: integer("rotation_boost").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -130,6 +141,11 @@ export const posts = pgTable("posts", {
   caption: text("caption").notNull(),
   outputVideoUrl: text("output_video_url"),
   outputImageUrl: text("output_image_url"),
+  outputImages: jsonb("output_images")
+    .$type<Partial<Record<PostFormat, string>>>()
+    .notNull()
+    .default({}),
+  publishFormat: text("publish_format").$type<PostFormat>().default("feed"),
   shotstackRenderId: text("shotstack_render_id"),
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   publishedAt: timestamp("published_at", { withTimezone: true }),

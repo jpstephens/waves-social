@@ -24,6 +24,7 @@ export type PostItem = {
   id: string;
   caption: string;
   imageUrl: string | null;
+  format: string;
   status: string;
   scheduledAt: string | null;
   playerName: string;

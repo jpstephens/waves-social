@@ -1,62 +1,48 @@
 import sharp from "sharp";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import type { PostFormat } from "@/lib/db/schema";
 
 /**
- * Deterministic image composition for highlight posts.
- *
- * The pipeline:
- *   1. Load the brand template (a hand-designed PNG with a designated photo zone).
- *   2. Crop + position the player photo onto the photo zone (no AI alteration).
- *   3. Render text overlays as SVG (player name, stat line, optional headline).
- *   4. Composite the Waves logo from /public/waves-logo.png.
- *   5. Output a 1080x1920 PNG buffer.
- *
- * Templates live in /public/templates and ship with the build. Per-template
- * layout zones are defined in TEMPLATE_LAYOUTS below.
+ * Deterministic image composition for highlight posts. Renders one of three
+ * formats: Instagram feed (4:5), square (1:1), or story/reel (9:16). Layers:
+ *   1. Background (AI-generated plate for this format, else static template).
+ *   2. Player photo (no AI alteration).
+ *   3. SVG text overlay: headline + name + stat line.
+ *   4. Waves logo.
  */
 
-const CANVAS = { width: 1080, height: 1920 };
-
-type Layout = {
-  templateFile: string;
+type FormatSpec = {
+  canvas: { width: number; height: number };
   photoZone: { x: number; y: number; width: number; height: number };
-  // Text rendered as a single SVG overlay covering the bottom portion
   textZone: { x: number; y: number; width: number; height: number };
   logoZone: { x: number; y: number; width: number };
+  staticTemplate: string; // fallback png under public/templates/ (per kind.format)
 };
 
-// All zones expressed in 1080x1920 coords. Tweak per template as you add more.
-const TEMPLATE_LAYOUTS: Record<string, Layout> = {
-  default: {
-    templateFile: "extra-base-hit.png",
+// Formats tuned so the text bar occupies the bottom ~35% and the player photo
+// fills the upper area above it with breathing room.
+const FORMAT_SPECS: Record<PostFormat, FormatSpec> = {
+  feed: {
+    canvas: { width: 1080, height: 1350 },
+    photoZone: { x: 180, y: 120, width: 720, height: 820 },
+    textZone: { x: 40, y: 940, width: 1000, height: 390 },
+    logoZone: { x: 40, y: 40, width: 100 },
+    staticTemplate: "feed-default.png",
+  },
+  square: {
+    canvas: { width: 1080, height: 1080 },
+    photoZone: { x: 220, y: 80, width: 640, height: 660 },
+    textZone: { x: 40, y: 750, width: 1000, height: 320 },
+    logoZone: { x: 40, y: 30, width: 88 },
+    staticTemplate: "square-default.png",
+  },
+  story: {
+    canvas: { width: 1080, height: 1920 },
     photoZone: { x: 240, y: 280, width: 600, height: 800 },
     textZone: { x: 60, y: 1200, width: 960, height: 600 },
     logoZone: { x: 60, y: 60, width: 120 },
-  },
-  extra_base_hit: {
-    templateFile: "extra-base-hit.png",
-    photoZone: { x: 240, y: 280, width: 600, height: 800 },
-    textZone: { x: 60, y: 1200, width: 960, height: 600 },
-    logoZone: { x: 60, y: 60, width: 120 },
-  },
-  rbi: {
-    templateFile: "extra-base-hit.png",
-    photoZone: { x: 240, y: 280, width: 600, height: 800 },
-    textZone: { x: 60, y: 1200, width: 960, height: 600 },
-    logoZone: { x: 60, y: 60, width: 120 },
-  },
-  pitching: {
-    templateFile: "pitching.png",
-    photoZone: { x: 240, y: 320, width: 600, height: 800 },
-    textZone: { x: 60, y: 1300, width: 960, height: 480 },
-    logoZone: { x: 60, y: 60, width: 120 },
-  },
-  stolen_base: {
-    templateFile: "extra-base-hit.png",
-    photoZone: { x: 240, y: 280, width: 600, height: 800 },
-    textZone: { x: 60, y: 1200, width: 960, height: 600 },
-    logoZone: { x: 60, y: 60, width: 120 },
+    staticTemplate: "extra-base-hit.png",
   },
 };
 
@@ -95,9 +81,14 @@ function buildTextSvg({
   );
   const stat = escapeXml(statLine);
 
-  // Use sans-serif (guaranteed available on Vercel Linux via DejaVu Sans etc).
-  // Impact/Haettenschweiler are not installed on the runtime, so text falls
-  // back to zero-width glyphs and the overlay appears blank.
+  // Scale text sizes with panel height so it reads well on all aspect ratios.
+  const headlineSize = Math.round(Math.min(width * 0.095, height * 0.22));
+  const nameSize = Math.round(headlineSize * 0.58);
+  const statSize = Math.round(headlineSize * 0.45);
+  const headlineY = Math.round(height * 0.32);
+  const nameY = headlineY + Math.round(headlineSize * 0.95);
+  const statY = nameY + Math.round(nameSize * 1.1);
+
   const FONT_DISPLAY = "sans-serif";
   const FONT_MONO = "monospace";
 
@@ -112,20 +103,19 @@ function buildTextSvg({
   </defs>
 
   <rect x="0" y="0" width="${width}" height="${height}" fill="url(#panel)"/>
-  <rect x="0" y="30" width="${width}" height="6" fill="${CYAN}"/>
+  <rect x="0" y="20" width="${width}" height="6" fill="${CYAN}"/>
 
-  <text x="${width / 2}" y="170" text-anchor="middle"
+  <text x="${width / 2}" y="${headlineY}" text-anchor="middle"
         font-family="${FONT_DISPLAY}" font-weight="900"
-        font-size="84" fill="${WHITE}" letter-spacing="2"
-        style="text-transform: uppercase;">${headlineUpper}</text>
+        font-size="${headlineSize}" fill="${WHITE}" letter-spacing="2">${headlineUpper}</text>
 
-  <text x="${width / 2}" y="300" text-anchor="middle"
+  <text x="${width / 2}" y="${nameY}" text-anchor="middle"
         font-family="${FONT_DISPLAY}" font-weight="800"
-        font-size="52" fill="${CYAN}" letter-spacing="8">${nameLine}</text>
+        font-size="${nameSize}" fill="${CYAN}" letter-spacing="6">${nameLine}</text>
 
-  <text x="${width / 2}" y="400" text-anchor="middle"
+  <text x="${width / 2}" y="${statY}" text-anchor="middle"
         font-family="${FONT_MONO}" font-weight="700"
-        font-size="42" fill="${WHITE}" opacity="0.95">${stat}</text>
+        font-size="${statSize}" fill="${WHITE}" opacity="0.95">${stat}</text>
 </svg>`;
   return Buffer.from(svg);
 }
@@ -138,48 +128,49 @@ function buildCircleMaskSvg(width: number, height: number): Buffer {
 }
 
 export type ComposeInput = {
-  kind: string;
+  format: PostFormat;
   headline: string;
   playerName: string;
   jerseyNumber?: number | null;
   statLine: string;
   photoBuffer?: Buffer | null;
-  /**
-   * If provided, used as the background. Should be a Buffer of the AI-generated
-   * Nano Banana plate. If absent, falls back to the static template PNG for
-   * the highlight kind.
-   */
+  /** AI-generated background plate buffer for this format. Optional — falls back
+   *  to a static PNG in /public/templates named by staticTemplate. */
   backgroundBuffer?: Buffer | null;
-  /**
-   * Crop style for the player photo:
-   *  - "fit": preserve aspect, fit within zone (letterbox on background)
-   *  - "circle": center-crop into a circle (best for headshots)
-   *  - "cover": fill the zone, may crop edges
-   */
   photoStyle?: "fit" | "circle" | "cover";
 };
 
 export async function composeHighlightImage(
   input: ComposeInput
 ): Promise<Buffer> {
-  const layout = TEMPLATE_LAYOUTS[input.kind] ?? TEMPLATE_LAYOUTS.default;
+  const spec = FORMAT_SPECS[input.format];
   const logoPath = path.join(PUBLIC_DIR, "waves-logo.png");
 
-  // Load background: prefer AI-generated plate, else static template fallback
-  const backgroundSource =
-    input.backgroundBuffer ??
-    (await fs.readFile(path.join(PUBLIC_DIR, "templates", layout.templateFile)));
+  // Load background: prefer AI plate, else per-format static template. If the
+  // format-specific template is missing, fall back to any template that exists.
+  let backgroundSource: Buffer;
+  if (input.backgroundBuffer) {
+    backgroundSource = input.backgroundBuffer;
+  } else {
+    const primaryTemplate = path.join(PUBLIC_DIR, "templates", spec.staticTemplate);
+    try {
+      backgroundSource = await fs.readFile(primaryTemplate);
+    } catch {
+      // fallback chain so we never throw on a missing template file
+      const fallback = path.join(PUBLIC_DIR, "templates", "extra-base-hit.png");
+      backgroundSource = await fs.readFile(fallback);
+    }
+  }
 
   const templateResized = await sharp(backgroundSource)
-    .resize(CANVAS.width, CANVAS.height, { fit: "cover", position: "center" })
+    .resize(spec.canvas.width, spec.canvas.height, { fit: "cover", position: "center" })
     .png()
     .toBuffer();
 
   const layers: sharp.OverlayOptions[] = [];
 
-  // 1. Player photo (if provided), processed but never AI-altered
   if (input.photoBuffer) {
-    const { width, height } = layout.photoZone;
+    const { width, height } = spec.photoZone;
     const style = input.photoStyle ?? "cover";
 
     let photoLayer: Buffer;
@@ -189,9 +180,7 @@ export async function composeHighlightImage(
         .png()
         .toBuffer();
       photoLayer = await sharp(square)
-        .composite([
-          { input: buildCircleMaskSvg(width, height), blend: "dest-in" },
-        ])
+        .composite([{ input: buildCircleMaskSvg(width, height), blend: "dest-in" }])
         .png()
         .toBuffer();
     } else {
@@ -206,15 +195,14 @@ export async function composeHighlightImage(
 
     layers.push({
       input: photoLayer,
-      left: layout.photoZone.x,
-      top: layout.photoZone.y,
+      left: spec.photoZone.x,
+      top: spec.photoZone.y,
     });
   }
 
-  // 2. Text overlay
   const textSvg = buildTextSvg({
-    width: layout.textZone.width,
-    height: layout.textZone.height,
+    width: spec.textZone.width,
+    height: spec.textZone.height,
     headline: input.headline,
     playerName: input.playerName,
     jerseyNumber: input.jerseyNumber,
@@ -222,21 +210,20 @@ export async function composeHighlightImage(
   });
   layers.push({
     input: textSvg,
-    left: layout.textZone.x,
-    top: layout.textZone.y,
+    left: spec.textZone.x,
+    top: spec.textZone.y,
   });
 
-  // 3. Waves logo (if file exists — fail soft if missing)
   try {
     await fs.access(logoPath);
     const logo = await sharp(logoPath)
-      .resize({ width: layout.logoZone.width })
+      .resize({ width: spec.logoZone.width })
       .png()
       .toBuffer();
     layers.push({
       input: logo,
-      left: layout.logoZone.x,
-      top: layout.logoZone.y,
+      left: spec.logoZone.x,
+      top: spec.logoZone.y,
     });
   } catch {
     // logo missing, skip

@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { requireCoach } from "@/lib/auth";
-import { db, highlights, players, posts, teams } from "@/lib/db";
+import {
+  db,
+  highlights,
+  players,
+  posts,
+  teams,
+  POST_FORMATS,
+  type PostFormat,
+} from "@/lib/db";
 import { uploadToBlob, uploadBufferToBlob } from "@/lib/blob";
 import { generateBackground } from "@/lib/nano-banana";
 import { composeHighlightImage } from "@/lib/compose";
@@ -10,15 +18,14 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 /**
- * Coach uploads a player photo for a single highlight. We:
- *   1. Save the photo to Blob (untouched by AI).
- *   2. Generate (or reuse) a Nano Banana background plate for this highlight.
- *   3. Code-composite: AI background + player photo + brand text + logo.
- *   4. Save the final image to Blob, return its URL.
+ * Coach uploads a player photo for a single highlight. We generate all three
+ * Instagram formats (feed 4:5, square 1:1, story 9:16) in parallel:
+ *   1. Save the photo to Blob once.
+ *   2. For each format: generate a Nano Banana bg plate → composite photo +
+ *      stats + logo → upload the final PNG.
+ *   3. Persist per-format URLs in highlights.generatedImages and posts.outputImages.
  *
- * If the photo is already attached and no new file is sent, this just
- * regenerates the composition (background + overlay) using the existing photo.
- * Pass `regenerateBackground=true` in the form to force a new bg gen.
+ * Pass `regenerateBackground=true` in the form to force fresh bg plates.
  */
 export async function POST(
   req: NextRequest,
@@ -65,96 +72,113 @@ export async function POST(
       photoBuffer = Buffer.from(await photoFile.arrayBuffer());
     }
 
-    // 2. Background — reuse if cached unless regenerate requested
-    let backgroundUrl = highlight.backgroundUrl;
-    let backgroundBuffer: Buffer | null = null;
-    let backgroundSource: "ai" | "template" | "cached" = "cached";
-    let backgroundError: string | null = null;
-
-    if (!backgroundUrl || regenerateBackground) {
-      try {
-        const bg = await generateBackground({ kind: highlight.kind });
-        const bgUpload = await uploadBufferToBlob({
-          buffer: bg.imageBuffer,
-          pathname: `highlights/${highlight.id}/bg-${Date.now()}.png`,
-          contentType: bg.mediaType,
-        });
-        backgroundUrl = bgUpload.url;
-        backgroundBuffer = bg.imageBuffer;
-        backgroundSource = "ai";
-
-        await db
-          .update(highlights)
-          .set({ backgroundUrl, imagePrompt: bg.prompt })
-          .where(eq(highlights.id, id));
-      } catch (err) {
-        backgroundSource = "template";
-        backgroundError = err instanceof Error ? err.message : String(err);
-        console.error("[nano-banana] bg generation failed", {
-          highlightId: id,
-          kind: highlight.kind,
-          error: backgroundError,
-        });
-      }
-    }
-
-    // If we still don't have a buffer (cached URL), let the compositor read
-    // from the static template by leaving backgroundBuffer null.
-
-    if (!photoBuffer && photoUrl) {
-      // Re-render path: we have a photo URL on the highlight but no fresh buffer.
-      // For a private Blob, we can't easily re-fetch — require new upload for now.
-      // (Future: use @vercel/blob's head() to download with auth.)
-      return NextResponse.json(
-        {
-          error:
-            "Photo not provided in this request. Re-upload to regenerate. (Re-fetching from private Blob will be added later.)",
-        },
-        { status: 400 }
-      );
-    }
-
     if (!photoBuffer) {
       return NextResponse.json(
-        { error: "photo file is required" },
+        { error: "photo file is required — re-drop to regenerate" },
         { status: 400 }
       );
     }
 
-    // 3. Composite
     const playerName =
       player?.firstName && player?.lastName
         ? `${player.firstName} ${player.lastName}`
-        : (player?.firstName ??
-          highlight.playerNameRaw ??
-          "Player");
+        : (player?.firstName ?? highlight.playerNameRaw ?? "Player");
     const jersey = player?.jerseyNumber ?? highlight.jerseyNumber;
 
-    const finalPng = await composeHighlightImage({
-      kind: highlight.kind,
-      headline: highlight.headline,
-      playerName,
-      jerseyNumber: jersey,
-      statLine: highlight.statLine ?? "",
-      photoBuffer,
-      backgroundBuffer,
-    });
+    // Fan out: for each format, get a bg plate (AI or cached) then composite +
+    // upload the final image. All three formats run concurrently.
+    const existingBackgrounds = highlight.backgrounds ?? {};
+    const existingOutputs = highlight.generatedImages ?? {};
 
-    const finalUpload = await uploadBufferToBlob({
-      buffer: finalPng,
-      pathname: `highlights/${highlight.id}/post-${Date.now()}.png`,
-      contentType: "image/png",
-    });
+    const formatResults = await Promise.all(
+      POST_FORMATS.map(async (format) => {
+        let backgroundBuffer: Buffer | null = null;
+        let backgroundUrl: string | null = existingBackgrounds[format] ?? null;
+        let backgroundSource: "ai" | "template" | "cached" = "cached";
+        let backgroundError: string | null = null;
+
+        if (!backgroundUrl || regenerateBackground) {
+          try {
+            const bg = await generateBackground({
+              kind: highlight.kind,
+              format,
+            });
+            const bgUpload = await uploadBufferToBlob({
+              buffer: bg.imageBuffer,
+              pathname: `highlights/${highlight.id}/bg-${format}-${Date.now()}.png`,
+              contentType: bg.mediaType,
+            });
+            backgroundUrl = bgUpload.url;
+            backgroundBuffer = bg.imageBuffer;
+            backgroundSource = "ai";
+          } catch (err) {
+            backgroundSource = "template";
+            backgroundError = err instanceof Error ? err.message : String(err);
+            console.error("[nano-banana] bg failed", {
+              highlightId: id,
+              format,
+              kind: highlight.kind,
+              error: backgroundError,
+            });
+          }
+        }
+
+        const finalPng = await composeHighlightImage({
+          format,
+          headline: highlight.headline,
+          playerName,
+          jerseyNumber: jersey,
+          statLine: highlight.statLine ?? "",
+          photoBuffer,
+          backgroundBuffer,
+        });
+
+        const finalUpload = await uploadBufferToBlob({
+          buffer: finalPng,
+          pathname: `highlights/${highlight.id}/post-${format}-${Date.now()}.png`,
+          contentType: "image/png",
+        });
+
+        return {
+          format,
+          backgroundUrl,
+          outputUrl: finalUpload.url,
+          backgroundSource,
+          backgroundError,
+        };
+      })
+    );
+
+    const backgroundsMap: Partial<Record<PostFormat, string>> = {
+      ...existingBackgrounds,
+    };
+    const outputsMap: Partial<Record<PostFormat, string>> = {
+      ...existingOutputs,
+    };
+    const sources: Partial<Record<PostFormat, "ai" | "template" | "cached">> = {};
+    const errors: Partial<Record<PostFormat, string>> = {};
+
+    for (const r of formatResults) {
+      if (r.backgroundUrl) backgroundsMap[r.format] = r.backgroundUrl;
+      outputsMap[r.format] = r.outputUrl;
+      sources[r.format] = r.backgroundSource;
+      if (r.backgroundError) errors[r.format] = r.backgroundError;
+    }
+
+    const feedUrl = outputsMap.feed ?? outputsMap.square ?? outputsMap.story ?? null;
 
     await db
       .update(highlights)
       .set({
         photoUrl,
-        generatedImageUrl: finalUpload.url,
+        backgrounds: backgroundsMap,
+        generatedImages: outputsMap,
+        // Keep legacy single-URL fields populated with the feed format.
+        backgroundUrl: backgroundsMap.feed ?? backgroundsMap.square ?? backgroundsMap.story ?? null,
+        generatedImageUrl: feedUrl,
       })
       .where(eq(highlights.id, id));
 
-    // Materialize / update a Post row so this highlight can be approved + scheduled.
     const [existingPost] = await db
       .select()
       .from(posts)
@@ -165,10 +189,9 @@ export async function POST(
       await db
         .update(posts)
         .set({
-          outputImageUrl: finalUpload.url,
+          outputImages: outputsMap,
+          outputImageUrl: feedUrl,
           renderStatus: "ready",
-          // If the post was already approved/scheduled, leave status alone.
-          // If it was draft, keep it as draft (coach still needs to approve the new render).
           ...(existingPost.status === "approved" ||
           existingPost.status === "scheduled" ||
           existingPost.status === "published"
@@ -186,7 +209,9 @@ export async function POST(
           highlightId: highlight.id,
           kind: "spotlight",
           caption: highlight.caption,
-          outputImageUrl: finalUpload.url,
+          outputImages: outputsMap,
+          outputImageUrl: feedUrl,
+          publishFormat: "feed",
           status: "draft",
           renderStatus: "ready",
         })
@@ -196,18 +221,16 @@ export async function POST(
 
     return NextResponse.json({
       postId,
-      generatedImageUrl: finalUpload.url,
-      backgroundUrl,
       photoUrl,
-      backgroundSource,
-      backgroundError,
+      generatedImages: outputsMap,
+      backgrounds: backgroundsMap,
+      backgroundSources: sources,
+      backgroundErrors: errors,
     });
   } catch (err) {
     console.error("media generation failed", err);
     return NextResponse.json(
-      {
-        error: err instanceof Error ? err.message : String(err),
-      },
+      { error: err instanceof Error ? err.message : String(err) },
       { status: 500 }
     );
   }

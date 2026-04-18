@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCoach } from "@/lib/auth";
-import { db, posts } from "@/lib/db";
+import { db, posts, POST_FORMATS, type PostFormat } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { createBufferUpdate, BufferNotConfiguredError } from "@/lib/buffer";
 
@@ -14,13 +14,23 @@ export async function POST(
   const { id } = await params;
   const body = (await req.json().catch(() => ({}))) as {
     scheduledAt?: string;
+    format?: PostFormat;
   };
 
   const [post] = await db.select().from(posts).where(eq(posts.id, id));
   if (!post) {
     return NextResponse.json({ error: "post not found" }, { status: 404 });
   }
-  const mediaUrl = post.outputVideoUrl ?? post.outputImageUrl;
+
+  const requestedFormat = body.format && POST_FORMATS.includes(body.format)
+    ? body.format
+    : (post.publishFormat ?? "feed");
+  const outputs = post.outputImages ?? {};
+  const mediaUrl =
+    post.outputVideoUrl ??
+    outputs[requestedFormat] ??
+    post.outputImageUrl ??
+    null;
   if (!mediaUrl) {
     return NextResponse.json(
       { error: "post has no rendered media yet" },
@@ -43,21 +53,20 @@ export async function POST(
         scheduledAt: scheduledAt ?? null,
         publishedAt: scheduledAt ? null : new Date(),
         bufferUpdateId: updateId,
+        publishFormat: requestedFormat,
         updatedAt: new Date(),
       })
       .where(eq(posts.id, id));
-    return NextResponse.json({ ok: true, updateId });
+    return NextResponse.json({ ok: true, updateId, format: requestedFormat });
   } catch (err) {
     if (err instanceof BufferNotConfiguredError) {
-      // For scheduled posts we still save the schedule locally so the calendar
-      // works without Buffer — the coach can wire up Buffer later, or we can
-      // add a cron/job that syncs to Buffer when the time comes.
       if (scheduledAt) {
         await db
           .update(posts)
           .set({
             status: "scheduled",
             scheduledAt,
+            publishFormat: requestedFormat,
             updatedAt: new Date(),
           })
           .where(eq(posts.id, id));
@@ -66,6 +75,7 @@ export async function POST(
           scheduledLocally: true,
           warning: "buffer_not_configured",
           mediaUrl,
+          format: requestedFormat,
         });
       }
       return NextResponse.json(

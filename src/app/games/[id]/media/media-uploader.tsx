@@ -13,7 +13,7 @@ import {
   Maximize2,
   X,
 } from "lucide-react";
-import type { Highlight, Post } from "@/lib/db/schema";
+import type { Highlight, Post, PostFormat } from "@/lib/db/schema";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +34,18 @@ const KIND_LABEL: Record<string, string> = {
   teamwork: "Teamwork",
 };
 
-type PostLite = Pick<Post, "id" | "status" | "caption"> | null;
+const FORMATS: { id: PostFormat; label: string; aspect: string; ratio: string }[] = [
+  { id: "feed", label: "Feed", aspect: "aspect-[4/5]", ratio: "4:5" },
+  { id: "square", label: "Square", aspect: "aspect-square", ratio: "1:1" },
+  { id: "story", label: "Story", aspect: "aspect-[9/16]", ratio: "9:16" },
+];
+
+type PostLite = Pick<
+  Post,
+  "id" | "status" | "caption" | "outputImages" | "publishFormat"
+> | null;
+
+type FormatUrls = Partial<Record<PostFormat, string>>;
 
 export function MediaUploader({
   highlight,
@@ -49,12 +60,18 @@ export function MediaUploader({
 }) {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [generatedUrl, setGeneratedUrl] = useState<string | null>(
-    highlight.generatedImageUrl
+  const [generatedImages, setGeneratedImages] = useState<FormatUrls>(
+    highlight.generatedImages ?? {}
   );
   const [postState, setPostState] = useState<PostLite>(
     post
-      ? { id: post.id, status: post.status, caption: post.caption }
+      ? {
+          id: post.id,
+          status: post.status,
+          caption: post.caption,
+          outputImages: post.outputImages,
+          publishFormat: post.publishFormat,
+        }
       : null
   );
   const [caption, setCaption] = useState<string>(
@@ -63,8 +80,11 @@ export function MediaUploader({
   const [savingCaption, setSavingCaption] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleValue, setScheduleValue] = useState<string>(defaultScheduleValue());
+  const [scheduleFormat, setScheduleFormat] = useState<PostFormat>(
+    post?.publishFormat ?? "feed"
+  );
   const [publishing, setPublishing] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreen, setFullscreen] = useState<PostFormat | null>(null);
 
   const onDrop = useCallback((files: File[]) => {
     if (files[0]) setPhotoFile(files[0]);
@@ -76,16 +96,22 @@ export function MediaUploader({
     onDrop,
   });
 
+  const hasAny = Object.keys(generatedImages).length > 0;
+
   const generate = useCallback(
     async (regenerateBackground = false) => {
-      if (!photoFile && !generatedUrl) {
-        toast.error("Drop a photo first");
+      if (!photoFile) {
+        toast.error(
+          hasAny
+            ? "Re-drop the photo to re-render"
+            : "Drop a photo first"
+        );
         return;
       }
       setGenerating(true);
       try {
         const fd = new FormData();
-        if (photoFile) fd.set("photo", photoFile);
+        fd.set("photo", photoFile);
         if (regenerateBackground) fd.set("regenerateBackground", "true");
 
         const res = await fetch(`/api/highlights/${highlight.id}/media`, {
@@ -95,21 +121,31 @@ export function MediaUploader({
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? `Failed (${res.status})`);
 
-        setGeneratedUrl(json.generatedImageUrl);
+        setGeneratedImages(json.generatedImages ?? {});
         if (json.postId) {
           setPostState((prev) => ({
             id: json.postId,
             status: prev?.status ?? "draft",
             caption: prev?.caption ?? caption,
+            outputImages: json.generatedImages ?? {},
+            publishFormat: prev?.publishFormat ?? "feed",
           }));
         }
-        if (json.backgroundSource === "template") {
-          toast.warning("AI background unavailable — used static template", {
-            description: json.backgroundError ?? undefined,
-          });
+        const sources = (json.backgroundSources ?? {}) as Partial<
+          Record<PostFormat, "ai" | "template" | "cached">
+        >;
+        const templateFormats = (Object.keys(sources) as PostFormat[]).filter(
+          (k) => sources[k] === "template"
+        );
+        if (templateFormats.length > 0) {
+          toast.warning(
+            `AI background unavailable for: ${templateFormats.join(", ")} — used static templates`
+          );
         } else {
           toast.success(
-            regenerateBackground ? "Re-rolled background" : "Image generated"
+            regenerateBackground
+              ? "Re-rolled backgrounds"
+              : "Generated 3 formats"
           );
         }
       } catch (err) {
@@ -118,10 +154,9 @@ export function MediaUploader({
         setGenerating(false);
       }
     },
-    [photoFile, highlight.id, generatedUrl, caption]
+    [photoFile, highlight.id, hasAny, caption]
   );
 
-  // Debounced caption save
   const captionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!postState?.id) return;
@@ -177,22 +212,29 @@ export function MediaUploader({
       const res = await fetch(`/api/posts/${postState.id}/publish`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scheduledAt: scheduledAt.toISOString() }),
+        body: JSON.stringify({
+          scheduledAt: scheduledAt.toISOString(),
+          format: scheduleFormat,
+        }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error ?? `Schedule failed (${res.status})`);
-      setPostState((p) => (p ? { ...p, status: "scheduled" } : p));
+      setPostState((p) =>
+        p ? { ...p, status: "scheduled", publishFormat: scheduleFormat } : p
+      );
       setScheduleOpen(false);
-      toast.success(`Scheduled for ${scheduledAt.toLocaleString()}`);
+      toast.success(
+        `Scheduled ${scheduleFormat} for ${scheduledAt.toLocaleString()}`
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Schedule failed");
     } finally {
       setPublishing(false);
     }
-  }, [postState?.id, scheduleValue]);
+  }, [postState?.id, scheduleValue, scheduleFormat]);
 
   const status = postState?.status ?? "draft";
-  const canApprove = Boolean(postState?.id) && generatedUrl && status === "draft";
+  const canApprove = Boolean(postState?.id) && hasAny && status === "draft";
   const canSchedule = Boolean(postState?.id) && status === "approved";
 
   return (
@@ -274,15 +316,16 @@ export function MediaUploader({
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => generate(false)}
-              disabled={generating || (!photoFile && !generatedUrl)}
+              disabled={generating || !photoFile}
+              title={!photoFile ? "Drop a photo to (re-)generate" : ""}
               className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg bg-cyan-400 text-navy-950 hover:bg-cyan-300 disabled:opacity-30"
             >
               {generating ? (
                 <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
               ) : null}
-              {generatedUrl ? "Re-render" : "Generate"}
+              {hasAny ? "Re-render all" : "Generate"}
             </button>
-            {generatedUrl && (
+            {hasAny && (
               <button
                 onClick={() => generate(true)}
                 disabled={generating || !photoFile}
@@ -290,20 +333,8 @@ export function MediaUploader({
                 className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg border border-navy-700 text-navy-300 hover:border-cyan-400 hover:text-cyan-400 disabled:opacity-30"
               >
                 <RefreshCcw className="h-3.5 w-3.5 mr-1" />
-                New background
+                New backgrounds
               </button>
-            )}
-            {generatedUrl && (
-              <a
-                href={generatedUrl}
-                download
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg border border-navy-700 text-navy-300 hover:border-cyan-400 hover:text-cyan-400"
-              >
-                <Download className="h-3.5 w-3.5 mr-1" />
-                Download
-              </a>
             )}
             <button
               onClick={approve}
@@ -324,51 +355,76 @@ export function MediaUploader({
           </div>
         </div>
 
-        {/* Right: preview */}
-        <div className="w-48 flex-shrink-0">
-          <div className="relative aspect-[9/16] rounded-lg bg-navy-950 border border-navy-800 overflow-hidden flex items-center justify-center group">
-            {generating ? (
-              <Loader2 className="h-6 w-6 text-cyan-400 animate-spin" />
-            ) : generatedUrl ? (
-              <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={generatedUrl}
-                  alt={`${playerName} post`}
-                  className="w-full h-full object-cover"
-                />
-                <button
-                  onClick={() => setFullscreen(true)}
-                  title="Fullscreen preview"
-                  className="absolute top-1.5 right-1.5 bg-navy-950/80 text-white rounded p-1.5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-cyan-400 hover:text-navy-950"
+        {/* Right: three format previews */}
+        <div className="w-64 flex-shrink-0 space-y-3">
+          {FORMATS.map((f) => {
+            const url = generatedImages[f.id];
+            return (
+              <div key={f.id} className="space-y-1">
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-navy-400">
+                  <span className="font-bold">{f.label}</span>
+                  <span className="font-mono">{f.ratio}</span>
+                </div>
+                <div
+                  className={`relative ${f.aspect} rounded-lg bg-navy-950 border border-navy-800 overflow-hidden flex items-center justify-center group`}
                 >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                </button>
-              </>
-            ) : (
-              <div className="text-navy-500 text-[10px] uppercase tracking-wider text-center px-2">
-                Preview will appear here
+                  {generating ? (
+                    <Loader2 className="h-5 w-5 text-cyan-400 animate-spin" />
+                  ) : url ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={url}
+                        alt={`${playerName} ${f.label}`}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => setFullscreen(f.id)}
+                          title="Fullscreen"
+                          className="bg-navy-950/80 text-white rounded p-1 hover:bg-cyan-400 hover:text-navy-950"
+                        >
+                          <Maximize2 className="h-3 w-3" />
+                        </button>
+                        <a
+                          href={url}
+                          download
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Download"
+                          className="bg-navy-950/80 text-white rounded p-1 hover:bg-cyan-400 hover:text-navy-950"
+                        >
+                          <Download className="h-3 w-3" />
+                        </a>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-navy-500 text-[10px] uppercase tracking-wider text-center px-2">
+                      {hasAny ? "Failed" : "—"}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })}
         </div>
       </div>
 
-      {fullscreen && generatedUrl && (
+      {fullscreen && generatedImages[fullscreen] && (
         <div
           className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-          onClick={() => setFullscreen(false)}
+          onClick={() => setFullscreen(null)}
         >
           <button
-            onClick={() => setFullscreen(false)}
+            onClick={() => setFullscreen(null)}
             className="absolute top-4 right-4 text-white/80 hover:text-white bg-navy-950/60 rounded-full p-2"
           >
             <X className="h-5 w-5" />
           </button>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={generatedUrl}
-            alt={`${playerName} post fullscreen`}
+            src={generatedImages[fullscreen]!}
+            alt={`${playerName} ${fullscreen} fullscreen`}
             className="max-h-[95vh] max-w-[95vw] object-contain rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
@@ -380,19 +436,44 @@ export function MediaUploader({
           <DialogHeader>
             <DialogTitle>Schedule post</DialogTitle>
             <DialogDescription>
-              Pick a date and time. Buffer will publish to Instagram at that moment.
+              Pick a format, date, and time. Buffer will publish to Instagram at that moment.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <label className="text-[11px] uppercase tracking-wider text-navy-400">
-              When
-            </label>
-            <input
-              type="datetime-local"
-              value={scheduleValue}
-              onChange={(e) => setScheduleValue(e.target.value)}
-              className="w-full rounded-lg bg-navy-950 border border-navy-800 text-white text-sm p-2 focus:border-cyan-400/60 focus:outline-none"
-            />
+          <div className="space-y-3">
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-navy-400">
+                Format
+              </label>
+              <div className="flex gap-1 mt-1">
+                {FORMATS.map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => setScheduleFormat(f.id)}
+                    className={`flex-1 rounded-lg border px-3 py-2 text-xs uppercase tracking-wider font-bold ${
+                      scheduleFormat === f.id
+                        ? "border-cyan-400 bg-cyan-400/10 text-cyan-300"
+                        : "border-navy-700 text-navy-400 hover:border-navy-600"
+                    }`}
+                  >
+                    {f.label}
+                    <div className="text-[9px] font-mono opacity-60 normal-case">
+                      {f.ratio}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-navy-400">
+                When
+              </label>
+              <input
+                type="datetime-local"
+                value={scheduleValue}
+                onChange={(e) => setScheduleValue(e.target.value)}
+                className="w-full mt-1 rounded-lg bg-navy-950 border border-navy-800 text-white text-sm p-2 focus:border-cyan-400/60 focus:outline-none"
+              />
+            </div>
           </div>
           <DialogFooter>
             <button
@@ -442,8 +523,7 @@ function StatusChip({
 }
 
 function defaultScheduleValue(): string {
-  const d = new Date(Date.now() + 60 * 60 * 1000); // +1h
-  // datetime-local needs YYYY-MM-DDTHH:mm in local time
+  const d = new Date(Date.now() + 60 * 60 * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

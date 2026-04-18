@@ -1,4 +1,4 @@
-import { and, eq, gte, lt, isNull, isNotNull, desc, asc, inArray } from "drizzle-orm";
+import { and, eq, gte, lt, isNull, isNotNull, desc, asc } from "drizzle-orm";
 import { AppShell } from "@/components/app-shell";
 import { requireCoach } from "@/lib/auth";
 import { db, posts, highlights, players } from "@/lib/db";
@@ -53,19 +53,32 @@ export default async function CalendarPage({
     .where(and(eq(posts.status, "approved"), isNull(posts.scheduledAt)))
     .orderBy(desc(posts.updatedAt));
 
-  const toItem = (r: (typeof scheduledRows)[number]) => ({
-    id: r.post.id,
-    caption: r.post.caption ?? "",
-    imageUrl: r.post.outputImageUrl ?? r.post.outputVideoUrl ?? null,
-    status: r.post.status,
-    scheduledAt: r.post.scheduledAt ? r.post.scheduledAt.toISOString() : null,
-    playerName: r.player
-      ? `${r.player.firstName} ${r.player.lastName ?? ""}`.trim()
-      : (r.highlight?.playerNameRaw ?? "Unknown"),
-    jerseyNumber: r.player?.jerseyNumber ?? r.highlight?.jerseyNumber ?? null,
-    kind: r.highlight?.kind ?? "",
-    headline: r.highlight?.headline ?? "",
-  });
+  const toItem = (r: (typeof scheduledRows)[number]) => {
+    const outputs = r.post.outputImages ?? {};
+    const publishFormat = r.post.publishFormat ?? "feed";
+    const imageUrl =
+      outputs[publishFormat] ??
+      outputs.feed ??
+      outputs.square ??
+      outputs.story ??
+      r.post.outputImageUrl ??
+      r.post.outputVideoUrl ??
+      null;
+    return {
+      id: r.post.id,
+      caption: r.post.caption ?? "",
+      imageUrl,
+      format: publishFormat,
+      status: r.post.status,
+      scheduledAt: r.post.scheduledAt ? r.post.scheduledAt.toISOString() : null,
+      playerName: r.player
+        ? `${r.player.firstName} ${r.player.lastName ?? ""}`.trim()
+        : (r.highlight?.playerNameRaw ?? "Unknown"),
+      jerseyNumber: r.player?.jerseyNumber ?? r.highlight?.jerseyNumber ?? null,
+      kind: r.highlight?.kind ?? "",
+      headline: r.highlight?.headline ?? "",
+    };
+  };
 
   return (
     <AppShell subtitle="Content Calendar">
