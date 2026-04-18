@@ -1,22 +1,25 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
-import { Loader2, RefreshCcw, UploadCloud, Download } from "lucide-react";
-import type { Highlight } from "@/lib/db/schema";
-
-// Vercel Blob URLs for private stores can't be loaded directly in the browser
-// (no auth). Route through our server proxy at /api/blob/[...path].
-function toProxySrc(rawUrl: string | null): string | null {
-  if (!rawUrl) return null;
-  try {
-    const pathname = new URL(rawUrl).pathname.replace(/^\/+/, "");
-    return `/api/blob/${pathname}`;
-  } catch {
-    return rawUrl;
-  }
-}
+import {
+  Loader2,
+  RefreshCcw,
+  UploadCloud,
+  Download,
+  Check,
+  CalendarClock,
+} from "lucide-react";
+import type { Highlight, Post } from "@/lib/db/schema";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 const KIND_LABEL: Record<string, string> = {
   extra_base_hit: "Extra-base hit",
@@ -29,12 +32,16 @@ const KIND_LABEL: Record<string, string> = {
   teamwork: "Teamwork",
 };
 
+type PostLite = Pick<Post, "id" | "status" | "caption"> | null;
+
 export function MediaUploader({
   highlight,
+  post,
   playerName,
   jerseyNumber,
 }: {
   highlight: Highlight;
+  post: Post | null;
   playerName: string;
   jerseyNumber: number | null;
 }) {
@@ -43,6 +50,18 @@ export function MediaUploader({
   const [generatedUrl, setGeneratedUrl] = useState<string | null>(
     highlight.generatedImageUrl
   );
+  const [postState, setPostState] = useState<PostLite>(
+    post
+      ? { id: post.id, status: post.status, caption: post.caption }
+      : null
+  );
+  const [caption, setCaption] = useState<string>(
+    post?.caption ?? highlight.caption ?? ""
+  );
+  const [savingCaption, setSavingCaption] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleValue, setScheduleValue] = useState<string>(defaultScheduleValue());
+  const [publishing, setPublishing] = useState(false);
 
   const onDrop = useCallback((files: File[]) => {
     if (files[0]) setPhotoFile(files[0]);
@@ -74,22 +93,109 @@ export function MediaUploader({
         if (!res.ok) throw new Error(json.error ?? `Failed (${res.status})`);
 
         setGeneratedUrl(json.generatedImageUrl);
-        toast.success(
-          regenerateBackground ? "Re-rolled background" : "Image generated"
-        );
+        if (json.postId) {
+          setPostState((prev) => ({
+            id: json.postId,
+            status: prev?.status ?? "draft",
+            caption: prev?.caption ?? caption,
+          }));
+        }
+        if (json.backgroundSource === "template") {
+          toast.warning("AI background unavailable — used static template", {
+            description: json.backgroundError ?? undefined,
+          });
+        } else {
+          toast.success(
+            regenerateBackground ? "Re-rolled background" : "Image generated"
+          );
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Generation failed");
       } finally {
         setGenerating(false);
       }
     },
-    [photoFile, highlight.id, generatedUrl]
+    [photoFile, highlight.id, generatedUrl, caption]
   );
+
+  // Debounced caption save
+  const captionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!postState?.id) return;
+    if (caption === (postState.caption ?? "")) return;
+    if (captionTimer.current) clearTimeout(captionTimer.current);
+    captionTimer.current = setTimeout(async () => {
+      setSavingCaption(true);
+      try {
+        const res = await fetch(`/api/posts/${postState.id}/caption`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ caption }),
+        });
+        if (!res.ok) throw new Error(`Save failed (${res.status})`);
+        setPostState((p) => (p ? { ...p, caption } : p));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Caption save failed");
+      } finally {
+        setSavingCaption(false);
+      }
+    }, 800);
+    return () => {
+      if (captionTimer.current) clearTimeout(captionTimer.current);
+    };
+  }, [caption, postState?.id, postState?.caption]);
+
+  const approve = useCallback(async () => {
+    if (!postState?.id) return;
+    try {
+      const res = await fetch(`/api/posts/${postState.id}/approve`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error ?? `Approve failed (${res.status})`);
+      }
+      setPostState((p) => (p ? { ...p, status: "approved" } : p));
+      toast.success("Approved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Approve failed");
+    }
+  }, [postState?.id]);
+
+  const schedule = useCallback(async () => {
+    if (!postState?.id) return;
+    setPublishing(true);
+    try {
+      const scheduledAt = new Date(scheduleValue);
+      if (isNaN(scheduledAt.getTime())) throw new Error("Invalid date/time");
+      if (scheduledAt.getTime() < Date.now() - 60_000) {
+        throw new Error("Pick a future time");
+      }
+      const res = await fetch(`/api/posts/${postState.id}/publish`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scheduledAt: scheduledAt.toISOString() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? `Schedule failed (${res.status})`);
+      setPostState((p) => (p ? { ...p, status: "scheduled" } : p));
+      setScheduleOpen(false);
+      toast.success(`Scheduled for ${scheduledAt.toLocaleString()}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Schedule failed");
+    } finally {
+      setPublishing(false);
+    }
+  }, [postState?.id, scheduleValue]);
+
+  const status = postState?.status ?? "draft";
+  const canApprove = Boolean(postState?.id) && generatedUrl && status === "draft";
+  const canSchedule = Boolean(postState?.id) && status === "approved";
 
   return (
     <li className="rounded-xl border-2 border-navy-800 bg-navy-900 p-4">
       <div className="flex gap-4">
-        {/* Left: highlight info + photo dropzone */}
+        {/* Left: highlight info + photo dropzone + caption + actions */}
         <div className="flex-1 min-w-0 space-y-3">
           <div className="flex items-center gap-3">
             <div className="relative w-12 h-12 rounded-full bg-gradient-to-br from-navy-700 to-navy-900 border-2 border-navy-700 flex items-center justify-center flex-shrink-0">
@@ -100,7 +206,7 @@ export function MediaUploader({
                 {jerseyNumber ?? "—"}
               </span>
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="text-white font-bold text-base truncate">
                 {playerName}
               </div>
@@ -113,6 +219,7 @@ export function MediaUploader({
                 </span>
               </div>
             </div>
+            <StatusChip status={status} hasPost={Boolean(postState?.id)} />
           </div>
 
           <div className="font-heading text-lg text-white tracking-tight">
@@ -139,6 +246,28 @@ export function MediaUploader({
             )}
           </div>
 
+          {postState?.id && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] uppercase tracking-wider text-navy-400">
+                  Caption
+                </label>
+                {savingCaption && (
+                  <span className="text-[10px] text-navy-500 flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+                  </span>
+                )}
+              </div>
+              <textarea
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
+                rows={3}
+                placeholder="Write a caption for Instagram…"
+                className="w-full rounded-lg bg-navy-950 border border-navy-800 text-white text-sm p-2 focus:border-cyan-400/60 focus:outline-none resize-y"
+              />
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => generate(false)}
@@ -163,7 +292,7 @@ export function MediaUploader({
             )}
             {generatedUrl && (
               <a
-                href={toProxySrc(generatedUrl) ?? generatedUrl}
+                href={generatedUrl}
                 download
                 target="_blank"
                 rel="noreferrer"
@@ -173,6 +302,22 @@ export function MediaUploader({
                 Download
               </a>
             )}
+            <button
+              onClick={approve}
+              disabled={!canApprove}
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg border border-cyan-400/40 text-cyan-400 hover:bg-cyan-400/10 disabled:opacity-30"
+            >
+              <Check className="h-3.5 w-3.5 mr-1" />
+              Approve
+            </button>
+            <button
+              onClick={() => setScheduleOpen(true)}
+              disabled={!canSchedule}
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg border border-navy-700 text-navy-300 hover:border-cyan-400 hover:text-cyan-400 disabled:opacity-30"
+            >
+              <CalendarClock className="h-3.5 w-3.5 mr-1" />
+              Schedule
+            </button>
           </div>
         </div>
 
@@ -184,7 +329,7 @@ export function MediaUploader({
             ) : generatedUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={toProxySrc(generatedUrl) ?? generatedUrl}
+                src={generatedUrl}
                 alt={`${playerName} post`}
                 className="w-full h-full object-cover"
               />
@@ -196,6 +341,76 @@ export function MediaUploader({
           </div>
         </div>
       </div>
+
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Schedule post</DialogTitle>
+            <DialogDescription>
+              Pick a date and time. Buffer will publish to Instagram at that moment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-[11px] uppercase tracking-wider text-navy-400">
+              When
+            </label>
+            <input
+              type="datetime-local"
+              value={scheduleValue}
+              onChange={(e) => setScheduleValue(e.target.value)}
+              className="w-full rounded-lg bg-navy-950 border border-navy-800 text-white text-sm p-2 focus:border-cyan-400/60 focus:outline-none"
+            />
+          </div>
+          <DialogFooter>
+            <button
+              onClick={() => setScheduleOpen(false)}
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg border border-navy-700 text-navy-300 hover:border-cyan-400"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={schedule}
+              disabled={publishing}
+              className="inline-flex items-center text-xs uppercase tracking-wider font-bold px-3 py-2 rounded-lg bg-cyan-400 text-navy-950 hover:bg-cyan-300 disabled:opacity-30"
+            >
+              {publishing && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+              Schedule
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </li>
   );
+}
+
+function StatusChip({
+  status,
+  hasPost,
+}: {
+  status: string;
+  hasPost: boolean;
+}) {
+  if (!hasPost) return null;
+  const map: Record<string, { label: string; cls: string }> = {
+    draft: { label: "Draft", cls: "bg-navy-800 text-navy-300" },
+    approved: { label: "Approved", cls: "bg-cyan-400/20 text-cyan-300" },
+    scheduled: { label: "Scheduled", cls: "bg-amber-400/20 text-amber-300" },
+    published: { label: "Published", cls: "bg-emerald-500/20 text-emerald-300" },
+    failed: { label: "Failed", cls: "bg-red-500/20 text-red-300" },
+  };
+  const s = map[status] ?? map.draft;
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded ${s.cls}`}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+function defaultScheduleValue(): string {
+  const d = new Date(Date.now() + 60 * 60 * 1000); // +1h
+  // datetime-local needs YYYY-MM-DDTHH:mm in local time
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

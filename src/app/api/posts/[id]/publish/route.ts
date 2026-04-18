@@ -28,24 +28,46 @@ export async function POST(
     );
   }
 
+  const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : undefined;
+
   try {
     const { updateId } = await createBufferUpdate({
       caption: post.caption,
       mediaUrl,
-      scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : undefined,
+      scheduledAt,
     });
     await db
       .update(posts)
       .set({
-        status: body.scheduledAt ? "scheduled" : "published",
-        scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-        publishedAt: body.scheduledAt ? null : new Date(),
+        status: scheduledAt ? "scheduled" : "published",
+        scheduledAt: scheduledAt ?? null,
+        publishedAt: scheduledAt ? null : new Date(),
         bufferUpdateId: updateId,
+        updatedAt: new Date(),
       })
       .where(eq(posts.id, id));
     return NextResponse.json({ ok: true, updateId });
   } catch (err) {
     if (err instanceof BufferNotConfiguredError) {
+      // For scheduled posts we still save the schedule locally so the calendar
+      // works without Buffer — the coach can wire up Buffer later, or we can
+      // add a cron/job that syncs to Buffer when the time comes.
+      if (scheduledAt) {
+        await db
+          .update(posts)
+          .set({
+            status: "scheduled",
+            scheduledAt,
+            updatedAt: new Date(),
+          })
+          .where(eq(posts.id, id));
+        return NextResponse.json({
+          ok: true,
+          scheduledLocally: true,
+          warning: "buffer_not_configured",
+          mediaUrl,
+        });
+      }
       return NextResponse.json(
         {
           error: "buffer_not_configured",

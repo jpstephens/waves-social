@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { eq, asc, and } from "drizzle-orm";
-import { db, games, highlights, players } from "@/lib/db";
+import { db, games, highlights, players, posts } from "@/lib/db";
 import { AppShell } from "@/components/app-shell";
 import { requireCoach } from "@/lib/auth";
 import { MediaUploader } from "./media-uploader";
@@ -19,9 +19,10 @@ export default async function GameMediaPage({
   if (!game) notFound();
 
   const rows = await db
-    .select({ highlight: highlights, player: players })
+    .select({ highlight: highlights, player: players, post: posts })
     .from(highlights)
     .leftJoin(players, eq(highlights.playerId, players.id))
+    .leftJoin(posts, eq(posts.highlightId, highlights.id))
     .where(
       and(eq(highlights.gameId, id), eq(highlights.status, "selected"))
     )
@@ -50,6 +51,7 @@ export default async function GameMediaPage({
               <MediaUploader
                 key={r.highlight.id}
                 highlight={r.highlight}
+                post={r.post}
                 playerName={
                   r.player
                     ? `${r.player.firstName} ${r.player.lastName ?? ""}`.trim()

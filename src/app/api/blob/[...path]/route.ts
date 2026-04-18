@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { head, list } from "@vercel/blob";
+import { get } from "@vercel/blob";
 import { requireCoach } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 /**
- * Proxy private Blob content through the server so it's viewable in the browser.
+ * Auth-gated blob reader for private blobs (e.g. uploaded PDFs).
+ * Public composites are served directly from their Blob URL and never hit this route.
  *
- * Usage from client:
- *   <img src={`/api/blob/${encodeURIComponent(blobPathname)}`} />
- *
- * The /api/blob path segment is for routing only — the rest of the URL is
- * the blob's pathname. We re-fetch the blob from Vercel Blob server-side
- * (which automatically uses BLOB_READ_WRITE_TOKEN) and stream the response.
+ * Usage:  <img src={`/api/blob/${pathname}`} />
  */
 export async function GET(
   _req: NextRequest,
@@ -24,20 +20,17 @@ export async function GET(
   const pathname = path.join("/");
 
   try {
-    // head() returns the blob's downloadUrl which the server can fetch with auth
-    const blob = await head(pathname);
-    const res = await fetch(blob.downloadUrl);
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: `blob fetch failed: ${res.status}` },
-        { status: res.status }
-      );
+    const result = await get(pathname, { access: "private" });
+    if (!result) {
+      return NextResponse.json({ error: "not found" }, { status: 404 });
     }
-    const contentType = blob.contentType || res.headers.get("content-type") || "application/octet-stream";
-    return new NextResponse(res.body, {
+    if (result.statusCode === 304 || !result.stream) {
+      return new NextResponse(null, { status: 304 });
+    }
+    return new NextResponse(result.stream, {
       status: 200,
       headers: {
-        "content-type": contentType,
+        "content-type": result.blob.contentType,
         "cache-control": "private, max-age=300",
       },
     });

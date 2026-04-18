@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { requireCoach } from "@/lib/auth";
-import { db, highlights, players, teams } from "@/lib/db";
+import { db, highlights, players, posts, teams } from "@/lib/db";
 import { uploadToBlob, uploadBufferToBlob } from "@/lib/blob";
 import { generateBackground } from "@/lib/nano-banana";
 import { composeHighlightImage } from "@/lib/compose";
@@ -68,6 +68,8 @@ export async function POST(
     // 2. Background — reuse if cached unless regenerate requested
     let backgroundUrl = highlight.backgroundUrl;
     let backgroundBuffer: Buffer | null = null;
+    let backgroundSource: "ai" | "template" | "cached" = "cached";
+    let backgroundError: string | null = null;
 
     if (!backgroundUrl || regenerateBackground) {
       try {
@@ -79,14 +81,20 @@ export async function POST(
         });
         backgroundUrl = bgUpload.url;
         backgroundBuffer = bg.imageBuffer;
+        backgroundSource = "ai";
 
         await db
           .update(highlights)
           .set({ backgroundUrl, imagePrompt: bg.prompt })
           .where(eq(highlights.id, id));
       } catch (err) {
-        // Fall back to static template if Nano Banana fails — don't block the post
-        console.warn("Nano Banana failed, falling back to static template", err);
+        backgroundSource = "template";
+        backgroundError = err instanceof Error ? err.message : String(err);
+        console.error("[nano-banana] bg generation failed", {
+          highlightId: id,
+          kind: highlight.kind,
+          error: backgroundError,
+        });
       }
     }
 
@@ -146,10 +154,53 @@ export async function POST(
       })
       .where(eq(highlights.id, id));
 
+    // Materialize / update a Post row so this highlight can be approved + scheduled.
+    const [existingPost] = await db
+      .select()
+      .from(posts)
+      .where(eq(posts.highlightId, highlight.id));
+
+    let postId: string;
+    if (existingPost) {
+      await db
+        .update(posts)
+        .set({
+          outputImageUrl: finalUpload.url,
+          renderStatus: "ready",
+          // If the post was already approved/scheduled, leave status alone.
+          // If it was draft, keep it as draft (coach still needs to approve the new render).
+          ...(existingPost.status === "approved" ||
+          existingPost.status === "scheduled" ||
+          existingPost.status === "published"
+            ? {}
+            : { status: "draft" }),
+          updatedAt: new Date(),
+        })
+        .where(eq(posts.id, existingPost.id));
+      postId = existingPost.id;
+    } else {
+      const [created] = await db
+        .insert(posts)
+        .values({
+          gameId: highlight.gameId,
+          highlightId: highlight.id,
+          kind: "spotlight",
+          caption: highlight.caption,
+          outputImageUrl: finalUpload.url,
+          status: "draft",
+          renderStatus: "ready",
+        })
+        .returning();
+      postId = created.id;
+    }
+
     return NextResponse.json({
+      postId,
       generatedImageUrl: finalUpload.url,
       backgroundUrl,
       photoUrl,
+      backgroundSource,
+      backgroundError,
     });
   } catch (err) {
     console.error("media generation failed", err);
