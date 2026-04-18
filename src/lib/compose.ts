@@ -5,44 +5,66 @@ import type { PostFormat } from "@/lib/db/schema";
 
 /**
  * Deterministic image composition for highlight posts. Renders one of three
- * formats: Instagram feed (4:5), square (1:1), or story/reel (9:16). Layers:
- *   1. Background (AI-generated plate for this format, else static template).
- *   2. Player photo (no AI alteration).
- *   3. SVG text overlay: headline + name + stat line.
- *   4. Waves logo.
+ * formats: Instagram feed (4:5), square (1:1), or story/reel (9:16).
+ *
+ * Layout:
+ *   - Photo hero fills the upper ~65% of the canvas (full-bleed, no side padding)
+ *   - Cyan accent bar divides photo from the stats panel
+ *   - Solid navy stats panel on the lower ~35% carries headline / name / stats
+ *   - Waves logo top-left
+ *
+ * Fonts: Anton (bundled under /public/fonts) is embedded as a base64 data URI
+ * inside the SVG so resvg in the Vercel runtime always renders, regardless of
+ * what's installed on the host. No system-font dependency.
  */
 
 type FormatSpec = {
   canvas: { width: number; height: number };
   photoZone: { x: number; y: number; width: number; height: number };
-  textZone: { x: number; y: number; width: number; height: number };
+  // The stat panel is drawn as a solid navy rect; text is rendered on top.
+  panelY: number; // Y where panel starts (photo ends)
+  panelHeight: number;
   logoZone: { x: number; y: number; width: number };
-  staticTemplate: string; // fallback png under public/templates/ (per kind.format)
+  staticTemplate: string;
+  // Text sizing that suits this format
+  headlineSize: number;
+  nameSize: number;
+  statSize: number;
 };
 
-// Formats tuned so the text bar occupies the bottom ~35% and the player photo
-// fills the upper area above it with breathing room.
 const FORMAT_SPECS: Record<PostFormat, FormatSpec> = {
   feed: {
     canvas: { width: 1080, height: 1350 },
-    photoZone: { x: 180, y: 120, width: 720, height: 820 },
-    textZone: { x: 40, y: 940, width: 1000, height: 390 },
-    logoZone: { x: 40, y: 40, width: 100 },
+    photoZone: { x: 0, y: 0, width: 1080, height: 880 },
+    panelY: 880,
+    panelHeight: 470,
+    logoZone: { x: 40, y: 40, width: 96 },
     staticTemplate: "feed-default.png",
+    headlineSize: 92,
+    nameSize: 54,
+    statSize: 40,
   },
   square: {
     canvas: { width: 1080, height: 1080 },
-    photoZone: { x: 220, y: 80, width: 640, height: 660 },
-    textZone: { x: 40, y: 750, width: 1000, height: 320 },
-    logoZone: { x: 40, y: 30, width: 88 },
+    photoZone: { x: 0, y: 0, width: 1080, height: 700 },
+    panelY: 700,
+    panelHeight: 380,
+    logoZone: { x: 40, y: 40, width: 88 },
     staticTemplate: "square-default.png",
+    headlineSize: 78,
+    nameSize: 46,
+    statSize: 36,
   },
   story: {
     canvas: { width: 1080, height: 1920 },
-    photoZone: { x: 240, y: 280, width: 600, height: 800 },
-    textZone: { x: 60, y: 1200, width: 960, height: 600 },
+    photoZone: { x: 0, y: 0, width: 1080, height: 1280 },
+    panelY: 1280,
+    panelHeight: 640,
     logoZone: { x: 60, y: 60, width: 120 },
     staticTemplate: "extra-base-hit.png",
+    headlineSize: 120,
+    nameSize: 68,
+    statSize: 48,
   },
 };
 
@@ -50,6 +72,25 @@ const PUBLIC_DIR = path.join(process.cwd(), "public");
 const NAVY = "#0a1929";
 const CYAN = "#22d3ee";
 const WHITE = "#ffffff";
+
+// Load and base64-encode the Anton font once so every SVG can reference it
+// via a data URI. Avoids runtime font-discovery issues in resvg.
+let FONT_DATA_URI_PROMISE: Promise<string> | null = null;
+async function getFontDataUri(): Promise<string> {
+  if (!FONT_DATA_URI_PROMISE) {
+    FONT_DATA_URI_PROMISE = (async () => {
+      try {
+        const buf = await fs.readFile(
+          path.join(PUBLIC_DIR, "fonts", "Anton-Regular.ttf")
+        );
+        return `data:font/ttf;base64,${buf.toString("base64")}`;
+      } catch {
+        return "";
+      }
+    })();
+  }
+  return FONT_DATA_URI_PROMISE;
+}
 
 function escapeXml(s: string) {
   return s
@@ -60,71 +101,71 @@ function escapeXml(s: string) {
     .replace(/'/g, "&apos;");
 }
 
-function buildTextSvg({
-  width,
-  height,
+async function buildPanelSvg({
+  canvasWidth,
+  panelY,
+  panelHeight,
+  canvasHeight,
   headline,
   playerName,
   jerseyNumber,
   statLine,
+  sizes,
 }: {
-  width: number;
-  height: number;
+  canvasWidth: number;
+  panelY: number;
+  panelHeight: number;
+  canvasHeight: number;
   headline: string;
   playerName: string;
   jerseyNumber?: number | null;
   statLine: string;
-}): Buffer {
+  sizes: { headline: number; name: number; stat: number };
+}): Promise<Buffer> {
+  const fontUri = await getFontDataUri();
   const headlineUpper = escapeXml(headline.toUpperCase());
   const nameLine = escapeXml(
     `${playerName.toUpperCase()}${jerseyNumber ? ` · #${jerseyNumber}` : ""}`
   );
-  const stat = escapeXml(statLine);
+  const stat = escapeXml(statLine.toUpperCase());
 
-  // Scale text sizes with panel height so it reads well on all aspect ratios.
-  const headlineSize = Math.round(Math.min(width * 0.095, height * 0.22));
-  const nameSize = Math.round(headlineSize * 0.58);
-  const statSize = Math.round(headlineSize * 0.45);
-  const headlineY = Math.round(height * 0.32);
-  const nameY = headlineY + Math.round(headlineSize * 0.95);
-  const statY = nameY + Math.round(nameSize * 1.1);
+  // Line positions relative to the panel top.
+  const cyanBarY = panelY;
+  const cyanBarHeight = 8;
+  const panelRectY = panelY + cyanBarHeight;
+  const panelRectHeight = panelHeight - cyanBarHeight;
 
-  const FONT_DISPLAY = "sans-serif";
-  const FONT_MONO = "monospace";
+  const innerTop = panelRectY + Math.round(panelRectHeight * 0.18);
+  const headlineY = innerTop + sizes.headline;
+  const nameY = headlineY + Math.round(sizes.headline * 0.9);
+  const statY = nameY + Math.round(sizes.name * 1.1);
+
+  const fontFace = fontUri
+    ? `@font-face { font-family: "Display"; src: url("${fontUri}") format("truetype"); font-weight: 400; font-style: normal; }`
+    : "";
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}" height="${canvasHeight}" viewBox="0 0 ${canvasWidth} ${canvasHeight}">
   <defs>
-    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${NAVY}" stop-opacity="0"/>
-      <stop offset="35%" stop-color="${NAVY}" stop-opacity="0.88"/>
-      <stop offset="100%" stop-color="${NAVY}" stop-opacity="0.98"/>
-    </linearGradient>
+    <style>${fontFace}</style>
   </defs>
 
-  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#panel)"/>
-  <rect x="0" y="20" width="${width}" height="6" fill="${CYAN}"/>
+  <rect x="0" y="${cyanBarY}" width="${canvasWidth}" height="${cyanBarHeight}" fill="${CYAN}"/>
+  <rect x="0" y="${panelRectY}" width="${canvasWidth}" height="${panelRectHeight}" fill="${NAVY}"/>
 
-  <text x="${width / 2}" y="${headlineY}" text-anchor="middle"
-        font-family="${FONT_DISPLAY}" font-weight="900"
-        font-size="${headlineSize}" fill="${WHITE}" letter-spacing="2">${headlineUpper}</text>
+  <text x="${canvasWidth / 2}" y="${headlineY}" text-anchor="middle"
+        font-family="Display, sans-serif"
+        font-size="${sizes.headline}" fill="${WHITE}" letter-spacing="2">${headlineUpper}</text>
 
-  <text x="${width / 2}" y="${nameY}" text-anchor="middle"
-        font-family="${FONT_DISPLAY}" font-weight="800"
-        font-size="${nameSize}" fill="${CYAN}" letter-spacing="6">${nameLine}</text>
+  <text x="${canvasWidth / 2}" y="${nameY}" text-anchor="middle"
+        font-family="Display, sans-serif"
+        font-size="${sizes.name}" fill="${CYAN}" letter-spacing="6">${nameLine}</text>
 
-  <text x="${width / 2}" y="${statY}" text-anchor="middle"
-        font-family="${FONT_MONO}" font-weight="700"
-        font-size="${statSize}" fill="${WHITE}" opacity="0.95">${stat}</text>
+  <text x="${canvasWidth / 2}" y="${statY}" text-anchor="middle"
+        font-family="Display, sans-serif"
+        font-size="${sizes.stat}" fill="${WHITE}" letter-spacing="3" opacity="0.92">${stat}</text>
 </svg>`;
   return Buffer.from(svg);
-}
-
-function buildCircleMaskSvg(width: number, height: number): Buffer {
-  const r = Math.min(width, height) / 2;
-  return Buffer.from(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><circle cx="${width / 2}" cy="${height / 2}" r="${r}" fill="white"/></svg>`
-  );
 }
 
 export type ComposeInput = {
@@ -134,10 +175,7 @@ export type ComposeInput = {
   jerseyNumber?: number | null;
   statLine: string;
   photoBuffer?: Buffer | null;
-  /** AI-generated background plate buffer for this format. Optional — falls back
-   *  to a static PNG in /public/templates named by staticTemplate. */
   backgroundBuffer?: Buffer | null;
-  photoStyle?: "fit" | "circle" | "cover";
 };
 
 export async function composeHighlightImage(
@@ -146,53 +184,58 @@ export async function composeHighlightImage(
   const spec = FORMAT_SPECS[input.format];
   const logoPath = path.join(PUBLIC_DIR, "waves-logo.png");
 
-  // Load background: prefer AI plate, else per-format static template. If the
-  // format-specific template is missing, fall back to any template that exists.
-  let backgroundSource: Buffer;
-  if (input.backgroundBuffer) {
-    backgroundSource = input.backgroundBuffer;
-  } else {
-    const primaryTemplate = path.join(PUBLIC_DIR, "templates", spec.staticTemplate);
-    try {
-      backgroundSource = await fs.readFile(primaryTemplate);
-    } catch {
-      // fallback chain so we never throw on a missing template file
-      const fallback = path.join(PUBLIC_DIR, "templates", "extra-base-hit.png");
-      backgroundSource = await fs.readFile(fallback);
-    }
-  }
-
-  const templateResized = await sharp(backgroundSource)
-    .resize(spec.canvas.width, spec.canvas.height, { fit: "cover", position: "center" })
+  // Base layer: solid navy canvas. AI/template background is only shown behind
+  // the photo zone; the stat panel draws on top with its own fill.
+  const baseCanvas = await sharp({
+    create: {
+      width: spec.canvas.width,
+      height: spec.canvas.height,
+      channels: 4,
+      background: NAVY,
+    },
+  })
     .png()
     .toBuffer();
 
   const layers: sharp.OverlayOptions[] = [];
 
-  if (input.photoBuffer) {
-    const { width, height } = spec.photoZone;
-    const style = input.photoStyle ?? "cover";
-
-    let photoLayer: Buffer;
-    if (style === "circle") {
-      const square = await sharp(input.photoBuffer)
-        .resize(width, height, { fit: "cover", position: "attention" })
-        .png()
-        .toBuffer();
-      photoLayer = await sharp(square)
-        .composite([{ input: buildCircleMaskSvg(width, height), blend: "dest-in" }])
-        .png()
-        .toBuffer();
-    } else {
-      photoLayer = await sharp(input.photoBuffer)
-        .resize(width, height, {
-          fit: style === "fit" ? "inside" : "cover",
-          position: "attention",
-        })
-        .png()
-        .toBuffer();
+  // Background plate sized to the photo zone (full-bleed). Lets the AI plate
+  // act as decorative context around/behind the player photo.
+  let backgroundBuf: Buffer;
+  if (input.backgroundBuffer) {
+    backgroundBuf = input.backgroundBuffer;
+  } else {
+    const primary = path.join(PUBLIC_DIR, "templates", spec.staticTemplate);
+    try {
+      backgroundBuf = await fs.readFile(primary);
+    } catch {
+      backgroundBuf = await fs.readFile(
+        path.join(PUBLIC_DIR, "templates", "extra-base-hit.png")
+      );
     }
+  }
+  const backgroundResized = await sharp(backgroundBuf)
+    .resize(spec.photoZone.width, spec.photoZone.height, {
+      fit: "cover",
+      position: "center",
+    })
+    .png()
+    .toBuffer();
+  layers.push({
+    input: backgroundResized,
+    left: spec.photoZone.x,
+    top: spec.photoZone.y,
+  });
 
+  // Player photo — full-bleed in the photo zone (covers the background).
+  if (input.photoBuffer) {
+    const photoLayer = await sharp(input.photoBuffer)
+      .resize(spec.photoZone.width, spec.photoZone.height, {
+        fit: "cover",
+        position: "attention",
+      })
+      .png()
+      .toBuffer();
     layers.push({
       input: photoLayer,
       left: spec.photoZone.x,
@@ -200,20 +243,26 @@ export async function composeHighlightImage(
     });
   }
 
-  const textSvg = buildTextSvg({
-    width: spec.textZone.width,
-    height: spec.textZone.height,
+  // Stat panel (cyan bar + navy panel + text), covering the full canvas width
+  // below the photo zone. Drawn as a single SVG so text anti-aliasing is clean.
+  const panelSvg = await buildPanelSvg({
+    canvasWidth: spec.canvas.width,
+    canvasHeight: spec.canvas.height,
+    panelY: spec.panelY,
+    panelHeight: spec.panelHeight,
     headline: input.headline,
     playerName: input.playerName,
     jerseyNumber: input.jerseyNumber,
     statLine: input.statLine,
+    sizes: {
+      headline: spec.headlineSize,
+      name: spec.nameSize,
+      stat: spec.statSize,
+    },
   });
-  layers.push({
-    input: textSvg,
-    left: spec.textZone.x,
-    top: spec.textZone.y,
-  });
+  layers.push({ input: panelSvg, left: 0, top: 0 });
 
+  // Waves logo on top of the hero photo.
   try {
     await fs.access(logoPath);
     const logo = await sharp(logoPath)
@@ -229,5 +278,5 @@ export async function composeHighlightImage(
     // logo missing, skip
   }
 
-  return sharp(templateResized).composite(layers).png().toBuffer();
+  return sharp(baseCanvas).composite(layers).png().toBuffer();
 }
